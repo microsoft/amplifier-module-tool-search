@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "amplifier-module-tool-search"
 version = "0.1.0"
-description = "Search tools module for Amplifier - grep and glob functionality"
+description = "Reference tool module - Search tools (grep/glob) for Amplifier"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
