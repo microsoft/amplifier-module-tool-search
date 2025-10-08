@@ -1,2 +1,0 @@
-[amplifier.modules]
-tool-search = amplifier_mod_tool_search:mount
