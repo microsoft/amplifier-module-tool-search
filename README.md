@@ -8,10 +8,25 @@ This module provides essential search capabilities:
 - **GrepTool**: Search file contents using regex patterns
 - **GlobTool**: Find files matching glob patterns
 
+## Prerequisites
+
+- **Python 3.11+**
+- **[UV](https://github.com/astral-sh/uv)** - Fast Python package manager
+
+### Installing UV
+
+```bash
+# macOS/Linux/WSL
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
 ## Installation
 
 ```bash
-pip install -e .
+uv pip install -e .
 ```
 
 ## Configuration
@@ -152,7 +167,7 @@ Both tools handle errors gracefully:
 
 ```bash
 # Install in development mode
-pip install -e .
+uv pip install -e .
 
 # Run basic tests (when available)
 pytest tests/
