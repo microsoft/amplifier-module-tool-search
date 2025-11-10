@@ -1,7 +1,7 @@
 """GlobTool - Find files matching glob patterns."""
 
 from pathlib import Path
-from typing import Any, List
+from typing import Any
 
 from amplifier_core import ToolResult
 
@@ -10,7 +10,14 @@ class GlobTool:
     """Find files matching glob patterns."""
 
     name = "glob"
-    description = "Find files matching a pattern"
+    description = """
+- Fast file pattern matching tool that works with any codebase size
+- Supports glob patterns like "**/*.js" or "src/**/*.ts"
+- Returns matching file paths sorted by modification time
+- Use this tool when you need to find files by name patterns
+- When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the task tool instead
+- You can call multiple tools in a single response. It is always better to speculatively perform multiple searches in parallel if they are potentially useful.
+                   """
 
     def __init__(self, config: dict[str, Any]):
         """Initialize GlobTool with configuration."""
@@ -66,12 +73,15 @@ class GlobTool:
                 return ToolResult(success=False, error={"message": f"Path not found: {base_path}"})
 
             # Find matching paths
-            matches: List[dict[str, Any]] = []
+            matches: list[dict[str, Any]] = []
             for match_path in path.glob(pattern):
                 # Apply type filter
-                if filter_type == "file" and not match_path.is_file():
-                    continue
-                elif filter_type == "dir" and not match_path.is_dir():
+                if (
+                    filter_type == "file"
+                    and not match_path.is_file()
+                    or filter_type == "dir"
+                    and not match_path.is_dir()
+                ):
                     continue
 
                 # Apply exclusions
@@ -82,20 +92,33 @@ class GlobTool:
                         break
 
                 if not excluded:
-                    match_info: dict[str, Any] = {
-                        "path": str(match_path),
-                        "type": "file" if match_path.is_file() else "dir",
-                    }
-                    # Add size for files
-                    if match_path.is_file():
-                        match_info["size"] = match_path.stat().st_size
-                    else:
-                        match_info["size"] = None
+                    try:
+                        stat = match_path.stat()
+                        match_info: dict[str, Any] = {
+                            "path": str(match_path),
+                            "type": "file" if match_path.is_file() else "dir",
+                            "mtime": stat.st_mtime,  # For sorting
+                        }
+                        # Add size for files
+                        if match_path.is_file():
+                            match_info["size"] = stat.st_size
+                        else:
+                            match_info["size"] = None
 
-                    matches.append(match_info)
+                        matches.append(match_info)
+                    except OSError:
+                        # Skip files we can't stat
+                        continue
 
                 if len(matches) >= self.max_results:
                     break
+
+            # Sort by modification time (newest first) as advertised
+            matches.sort(key=lambda m: m["mtime"], reverse=True)
+
+            # Remove mtime from output (internal sorting key only)
+            for match in matches:
+                del match["mtime"]
 
             return ToolResult(
                 success=True,

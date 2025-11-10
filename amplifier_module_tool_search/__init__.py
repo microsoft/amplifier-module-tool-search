@@ -4,9 +4,9 @@ Provides grep and glob tools for searching files and content.
 """
 
 import logging
-from typing import Any, List
+from typing import Any
 
-from amplifier_core import ModuleCoordinator, Tool
+from amplifier_core import ModuleCoordinator
 
 from .glob import GlobTool
 from .grep import GrepTool

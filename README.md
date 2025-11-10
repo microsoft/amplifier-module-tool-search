@@ -5,13 +5,14 @@ Self-contained search tools module for Amplifier, providing grep and glob functi
 ## Purpose
 
 This module provides essential search capabilities:
-- **GrepTool**: Search file contents using regex patterns
+- **GrepTool**: Search file contents using regex patterns (hybrid: ripgrep when available, Python re fallback)
 - **GlobTool**: Find files matching glob patterns
 
 ## Prerequisites
 
 - **Python 3.11+**
 - **[UV](https://github.com/astral-sh/uv)** - Fast Python package manager
+- **[ripgrep](https://github.com/BurntSushi/ripgrep)** - Optional (recommended for better performance)
 
 ### Installing UV
 
@@ -22,6 +23,23 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # Windows
 powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
+
+### Installing ripgrep (Optional but Recommended)
+
+Ripgrep provides significantly faster search performance. The tool automatically detects if ripgrep is available and falls back to Python's built-in `re` module if not.
+
+```bash
+# Ubuntu/Debian
+apt install ripgrep
+
+# macOS
+brew install ripgrep
+
+# Windows
+choco install ripgrep
+```
+
+**Note**: GrepTool works without ripgrep installed - it will automatically use Python's `re` module as a fallback, providing universal compatibility with graceful performance degradation.
 
 ## Installation
 
@@ -37,64 +55,216 @@ Add to your Amplifier configuration:
 modules:
   search:
     module: "amplifier-module-tool-search"
-    config:
-      max_results: 100      # Default max results for both tools
-      allowed_paths:        # Paths allowed for searching
-        - "."
-      grep:
-        max_file_size: 10485760  # 10MB max file size for grep
-      glob:
-        max_results: 1000   # Override for glob specifically
+    source: "git+https://github.com/microsoft/amplifier-module-tool-search@main"
+    config: {}  # No config required - ripgrep handles everything
 ```
+
+Note: GrepTool automatically detects if ripgrep is available:
+- **With ripgrep**: Uses ripgrep for extreme performance (recommended)
+- **Without ripgrep**: Falls back to Python's `re` module (slower but works everywhere)
+
+## Practical Examples
+
+### Common Search Patterns
+
+**Find all Python classes:**
+```json
+{
+  "pattern": "^class \\w+",
+  "type": "py",
+  "output_mode": "content",
+  "head_limit": 20
+}
+```
+
+**Find TODOs in code:**
+```json
+{
+  "pattern": "TODO|FIXME|XXX",
+  "-i": true,
+  "output_mode": "content",
+  "glob": "**/*.py"
+}
+```
+
+**Count imports per file:**
+```json
+{
+  "pattern": "^import |^from ",
+  "type": "py",
+  "output_mode": "count"
+}
+```
+
+**Find files containing specific text:**
+```json
+{
+  "pattern": "AmplifierSession",
+  "output_mode": "files_with_matches",
+  "glob": "**/*.md"
+}
+```
+
+**Search with context (show surrounding lines):**
+```json
+{
+  "pattern": "def execute",
+  "type": "py",
+  "output_mode": "content",
+  "-C": 3,
+  "head_limit": 5
+}
+```
+
+**Pagination example (iterate through results):**
+```json
+// First page
+{
+  "pattern": "function",
+  "type": "js",
+  "output_mode": "content",
+  "head_limit": 50,
+  "offset": 0
+}
+
+// Second page (use total_matches to know if more exist)
+{
+  "pattern": "function",
+  "type": "js",
+  "output_mode": "content",
+  "head_limit": 50,
+  "offset": 50
+}
+```
+
+### Performance Tips
+
+**Grep performance:**
+- **With ripgrep installed**: Extremely fast, optimized for large codebases
+- **Without ripgrep**: Slower but functional, good for smaller projects
+- **Tip**: Install ripgrep for best experience on large codebases
+
+**Glob performance:**
+- Returns results sorted by modification time (newest first)
+- Fast for any codebase size
+- Use `type: "file"` to exclude directories from results
+
+**Choosing between glob and type parameter:**
+- **Use `type`** when searching standard file types (faster with ripgrep):
+  ```json
+  {"pattern": "error", "type": "py"}  // Optimized
+  ```
+
+- **Use `glob`** for custom patterns or multiple extensions:
+  ```json
+  {"pattern": "error", "glob": "**/*.{test.py,spec.py}"}  // Custom pattern
+  ```
 
 ## Tools
 
 ### GrepTool
 
-Search file contents with regex patterns.
+Search file contents with regex patterns using ripgrep (fast) or Python re (fallback).
 
 **Input:**
 ```json
 {
   "pattern": "TODO|FIXME",
   "path": "src",
-  "recursive": true,
-  "ignore_case": false,
-  "include": "*.py",
-  "exclude": "*_test.py",
-  "context_lines": 2
+  "output_mode": "content",
+  "-i": false,
+  "-n": true,
+  "-C": 2,
+  "glob": "*.py",
+  "type": "py",
+  "multiline": false,
+  "head_limit": 100,
+  "offset": 0
 }
 ```
 
-**Features:**
-- Regular expression pattern matching
-- Recursive directory searching
-- Case sensitivity control
-- File pattern filtering (include/exclude)
-- Context lines around matches
-- Binary file detection and skipping
-- Large file protection (configurable max size)
+**Parameters:**
+- `pattern` (required): Regular expression pattern to search for
+- `path`: File or directory to search (default: current directory)
+- `output_mode`: Output format - "content" (matching lines), "files_with_matches" (file paths only), or "count" (match counts)
+- `-i`: Case insensitive search
+- `-n`: Show line numbers (default: true for content mode)
+- `-A`: Lines of context after each match
+- `-B`: Lines of context before each match
+- `-C`: Lines of context before and after each match
+- `glob`: Glob pattern to filter files (e.g., "*.py", "*.{ts,tsx}")
+- `type`: File type to search (e.g., "js", "py", "rust") - more efficient than glob
+- `multiline`: Enable multiline mode for cross-line patterns
+- `head_limit`: Limit output to first N results (default: 0 = unlimited). Use with `total_matches` to implement pagination.
+- `offset`: Skip first N results before applying head_limit (default: 0)
 
-**Output:**
+**Features:**
+- **Hybrid performance**: Automatically uses ripgrep (fast) or Python re (fallback)
+- Full regex syntax support
+- Multiple output modes (content, files, counts)
+- Context lines with flexible -A/-B/-C options
+- File filtering by glob pattern or file type
+- Multiline pattern matching
+- Result pagination with head_limit and offset
+- Binary file detection and skipping
+- Universal compatibility (works with or without ripgrep)
+
+**Output (content mode):**
 ```json
 {
   "pattern": "TODO|FIXME",
-  "matches": 5,
+  "output_mode": "content",
+  "total_matches": 47,
+  "matches_count": 5,
   "results": [
     {
       "file": "src/main.py",
-      "line_no": 42,
+      "line_number": 42,
       "content": "# TODO: Implement this function",
       "context": [
-        {"line_no": 40, "content": "def process():", "is_match": false},
-        {"line_no": 41, "content": "    \"\"\"Process data.\"\"\"", "is_match": false},
-        {"line_no": 42, "content": "    # TODO: Implement this function", "is_match": true},
-        {"line_no": 43, "content": "    pass", "is_match": false}
+        {"line_number": 40, "content": "def process():", "is_match": false},
+        {"line_number": 41, "content": "    \"\"\"Process data.\"\"\"", "is_match": false},
+        {"line_number": 42, "content": "    # TODO: Implement this function", "is_match": true},
+        {"line_number": 43, "content": "    pass", "is_match": false},
+        {"line_number": 44, "content": "", "is_match": false}
       ]
     }
   ]
 }
 ```
+Note: `context` field only appears when `-A`, `-B`, or `-C` options are used.
+
+**Output (files_with_matches mode):**
+```json
+{
+  "pattern": "TODO",
+  "output_mode": "files_with_matches",
+  "total_matches": 15,
+  "matches_count": 3,
+  "files": [
+    "src/main.py",
+    "src/utils.py",
+    "tests/test_main.py"
+  ]
+}
+```
+Note: `total_matches` shows all matching files, `matches_count` shows files after pagination.
+
+**Output (count mode):**
+```json
+{
+  "pattern": "TODO",
+  "output_mode": "count",
+  "total_matches": 47,
+  "matches_count": 10,
+  "counts": {
+    "src/main.py": 5,
+    "src/utils.py": 3,
+    "tests/test_main.py": 2
+  }
+}
+```
+Note: `total_matches` is sum of ALL file counts, `matches_count` is sum after pagination.
 
 ### GlobTool
 
@@ -145,8 +315,8 @@ This module follows Amplifier's modular design principles:
 - **Self-contained**: All functionality within the module directory
 - **Simple interface**: Clear input/output contracts via ToolResult
 - **Fail gracefully**: Meaningful error messages, partial results on file errors
-- **Performance conscious**: File size limits, result limits, binary detection
-- **Zero dependencies**: Uses only Python standard library + amplifier-core
+- **Opportunistic performance**: Uses ripgrep when available, falls back to Python re for universal compatibility
+- **Minimal dependencies**: Uses only Python standard library + amplifier-core (ripgrep optional)
 
 ## Error Handling
 
@@ -159,9 +329,11 @@ Both tools handle errors gracefully:
 
 ## Security
 
-- Configurable allowed_paths restriction (future enhancement)
-- Max file size protection against memory exhaustion
-- Binary file detection to avoid processing non-text files
+- Binary file detection (ripgrep has it built-in, Python re uses heuristic)
+- No arbitrary code execution (uses trusted tools: ripgrep binary or Python re module)
+- Result limits prevent memory exhaustion
+- File size limits prevent memory exhaustion (configurable, default 10MB)
+- Path traversal handled safely by both ripgrep and Python Path library
 
 ## Testing
 
@@ -183,7 +355,7 @@ pytest tests/
 
 **Side Effects**: None (read-only operations)
 
-**Dependencies**: amplifier-core
+**Dependencies**: amplifier-core, ripgrep (optional system binary for performance)
 
 ## Regeneration Specification
 
