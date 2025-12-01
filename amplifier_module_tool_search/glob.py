@@ -24,6 +24,7 @@ class GlobTool:
         self.config = config
         self.max_results = config.get("max_results", 1000)
         self.allowed_paths = config.get("allowed_paths", ["."])
+        self.working_dir = config.get("working_dir", ".")
 
     @property
     def input_schema(self) -> dict:
@@ -68,7 +69,12 @@ class GlobTool:
             return ToolResult(success=False, error={"message": "Pattern is required"})
 
         try:
-            path = Path(base_path)
+            # Resolve relative paths against working_dir
+            path_obj = Path(base_path)
+            if not path_obj.is_absolute():
+                path = Path(self.working_dir) / base_path
+            else:
+                path = path_obj
             if not path.exists():
                 return ToolResult(success=False, error={"message": f"Path not found: {base_path}"})
 
