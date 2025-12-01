@@ -33,7 +33,7 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
     glob_config = config.get("glob", {})
 
     # Merge with module-level defaults
-    for key in ["max_results", "allowed_paths"]:
+    for key in ["max_results", "allowed_paths", "working_dir"]:
         if key in config and key not in grep_config:
             grep_config[key] = config[key]
         if key in config and key not in glob_config:

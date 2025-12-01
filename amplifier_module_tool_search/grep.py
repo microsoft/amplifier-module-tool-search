@@ -62,6 +62,7 @@ A powerful search tool built on ripgrep (with Python re fallback)
         """Initialize GrepTool with configuration."""
         self.config = config
         self.max_file_size = config.get("max_file_size", 10 * 1024 * 1024)  # 10MB default
+        self.working_dir = config.get("working_dir", ".")
 
         # Check if ripgrep is available
         rg_path = shutil.which("rg")
@@ -200,8 +201,11 @@ A powerful search tool built on ripgrep (with Python re fallback)
         # Pattern
         cmd.append(pattern)
 
-        # Path
+        # Path - resolve relative paths against working_dir
         search_path = input.get("path", ".")
+        path_obj = Path(search_path)
+        if not path_obj.is_absolute():
+            search_path = str(Path(self.working_dir) / search_path)
         cmd.append(search_path)
 
         try:
@@ -370,8 +374,12 @@ A powerful search tool built on ripgrep (with Python re fallback)
 
             regex = re.compile(pattern, flags)
 
-            # Find files to search
-            path = Path(search_path)
+            # Find files to search - resolve relative paths against working_dir
+            path_obj = Path(search_path)
+            if not path_obj.is_absolute():
+                path = Path(self.working_dir) / search_path
+            else:
+                path = path_obj
             if not path.exists():
                 return ToolResult(success=False, error={"message": f"Path not found: {search_path}"})
 
