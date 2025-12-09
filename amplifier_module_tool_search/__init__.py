@@ -3,6 +3,9 @@
 Provides grep and glob tools for searching files and content.
 """
 
+# Amplifier module metadata
+__amplifier_module_type__ = "tool"
+
 import logging
 from typing import Any
 
