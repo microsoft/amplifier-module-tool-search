@@ -17,14 +17,31 @@ class GlobTool:
 - Use this tool when you need to find files by name patterns
 - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the task tool instead
 - You can call multiple tools in a single response. It is always better to speculatively perform multiple searches in parallel if they are potentially useful.
+
+SCOPE AND LIMITS:
+- By default, excludes common non-source directories: node_modules, .venv, .git, __pycache__, build dirs
+- Results are limited to 500 files by default to prevent context overflow
+- Set `include_ignored: true` to search excluded directories
+- Response includes `total_files` to know if results were capped
                    """
+
+    # Default exclusions - common non-source directories (same as grep)
+    DEFAULT_EXCLUSIONS = [
+        "node_modules", ".venv", "venv", ".git", "__pycache__",
+        ".mypy_cache", ".pytest_cache", ".tox", "dist", "build",
+        ".next", ".nuxt", "target", "vendor", ".gradle",
+        ".idea", ".vscode", "coverage", ".nyc_output",
+    ]
 
     def __init__(self, config: dict[str, Any]):
         """Initialize GlobTool with configuration."""
         self.config = config
-        self.max_results = config.get("max_results", 1000)
+        self.max_results = config.get("max_results", 500)
         self.allowed_paths = config.get("allowed_paths", ["."])
         self.working_dir = config.get("working_dir", ".")
+        
+        # Configurable exclusions (can override defaults)
+        self.exclusions = config.get("exclusions", self.DEFAULT_EXCLUSIONS)
 
     @property
     def input_schema(self) -> dict:
@@ -44,9 +61,21 @@ class GlobTool:
                     "items": {"type": "string"},
                     "description": "Patterns to exclude from results",
                 },
+                "include_ignored": {
+                    "type": "boolean",
+                    "description": "Search in normally-excluded directories (node_modules, .venv, .git, etc.). Default: false.",
+                },
             },
             "required": ["pattern"],
         }
+
+    def _is_excluded(self, path_str: str) -> bool:
+        """Check if a path should be excluded based on exclusion patterns."""
+        for exclusion in self.exclusions:
+            # Check for exclusion as a directory component
+            if f"/{exclusion}/" in path_str or f"/{exclusion}" in path_str or path_str.startswith(f"{exclusion}/"):
+                return True
+        return False
 
     async def execute(self, input: dict[str, Any]) -> ToolResult:
         """
@@ -58,12 +87,14 @@ class GlobTool:
                 "path": Optional[str] - Base path to search from
                 "type": Optional[str] - Filter by type: "file", "dir", "any"
                 "exclude": Optional[List[str]] - Patterns to exclude
+                "include_ignored": Optional[bool] - Include normally-excluded directories
             }
         """
         pattern = input.get("pattern")
         base_path = input.get("path", ".")
         filter_type = input.get("type", "any")
         exclude_patterns = input.get("exclude", [])
+        include_ignored = input.get("include_ignored", False)
 
         if not pattern:
             return ToolResult(success=False, error={"message": "Pattern is required"})
@@ -78,9 +109,16 @@ class GlobTool:
             if not path.exists():
                 return ToolResult(success=False, error={"message": f"Path not found: {base_path}"})
 
-            # Find matching paths
-            matches: list[dict[str, Any]] = []
+            # Find matching paths - collect all first to get total count
+            all_matches: list[dict[str, Any]] = []
             for match_path in path.glob(pattern):
+                # Convert to string for exclusion check (BEFORE stat() for performance)
+                match_path_str = str(match_path)
+
+                # Apply default exclusions (unless include_ignored is True)
+                if not include_ignored and self._is_excluded(match_path_str):
+                    continue
+
                 # Apply type filter
                 if (
                     filter_type == "file"
@@ -90,7 +128,7 @@ class GlobTool:
                 ):
                     continue
 
-                # Apply exclusions
+                # Apply user-specified exclusions
                 excluded = False
                 for exclude_pattern in exclude_patterns:
                     if match_path.match(exclude_pattern):
@@ -101,7 +139,7 @@ class GlobTool:
                     try:
                         stat = match_path.stat()
                         match_info: dict[str, Any] = {
-                            "path": str(match_path),
+                            "path": match_path_str,
                             "type": "file" if match_path.is_file() else "dir",
                             "mtime": stat.st_mtime,  # For sorting
                         }
@@ -111,25 +149,38 @@ class GlobTool:
                         else:
                             match_info["size"] = None
 
-                        matches.append(match_info)
+                        all_matches.append(match_info)
                     except OSError:
                         # Skip files we can't stat
                         continue
 
-                if len(matches) >= self.max_results:
-                    break
+            # Capture total before limiting
+            total_files = len(all_matches)
 
             # Sort by modification time (newest first) as advertised
-            matches.sort(key=lambda m: m["mtime"], reverse=True)
+            all_matches.sort(key=lambda m: m["mtime"], reverse=True)
+
+            # Apply limit
+            matches = all_matches[:self.max_results]
 
             # Remove mtime from output (internal sorting key only)
             for match in matches:
                 del match["mtime"]
 
-            return ToolResult(
-                success=True,
-                output={"pattern": pattern, "base_path": str(path), "count": len(matches), "matches": matches},
-            )
+            # Build output
+            output: dict[str, Any] = {
+                "pattern": pattern,
+                "base_path": str(path),
+                "total_files": total_files,
+                "count": len(matches),
+                "matches": matches,
+            }
+
+            # Add results_capped flag only if results were limited
+            if total_files > len(matches):
+                output["results_capped"] = True
+
+            return ToolResult(success=True, output=output)
 
         except Exception as e:
             return ToolResult(success=False, error={"message": f"Glob search failed: {e}"})
