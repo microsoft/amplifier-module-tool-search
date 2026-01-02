@@ -18,18 +18,44 @@ class GrepTool:
 
     name = "grep"
     description = r"""
-A powerful search tool built on ripgrep (with Python re fallback)
+Search file contents with regex patterns. Uses ripgrep when available (fast), falls back to Python re.
 
-  Usage:
-  - ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash command. The Grep tool has been optimized for correct permissions and access.
-  - Supports full regex syntax (e.g., "log.*Error", "function\s+\w+")
-  - Filter files with glob parameter (e.g., "*.js", "**/*.tsx") or type parameter (e.g., "js", "py", "rust")
-  - Output modes: "content" shows matching lines, "files_with_matches" shows only file paths (default), "count" shows match counts
-  - Use Task tool for open-ended searches requiring multiple rounds
-  - Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping (use `interface\{\}` to find `interface{}` in Go code)
-  - Multiline matching: By default patterns match within single lines only. For cross-line patterns like `struct \{[\s\S]*?field`, use `multiline: true`
-  - Performance: Uses ripgrep if available (fast), falls back to Python re (slower but universal)
+CAPABILITIES:
+- Full regex syntax (e.g., "log.*Error", "function\s+\w+")
+- Filter by glob pattern (e.g., "*.js", "**/*.tsx") or file type (e.g., "py", "js", "rust")
+- Output modes: "files_with_matches" (default), "content" (with line content), "count"
+- Multiline matching with `multiline: true` for patterns spanning lines
+
+SCOPE AND LIMITS:
+- By default, excludes common non-source directories: node_modules, .venv, .git, __pycache__, build dirs
+- Results are limited by default (200 files/counts, 500 content matches) to prevent context overflow
+- Set `include_ignored: true` to search excluded directories
+- Set explicit `head_limit: 0` for unlimited results (use with caution on large codebases)
+
+PATTERN SYNTAX:
+- Uses ripgrep regex (not grep) - literal braces need escaping: `interface\{\}` to find `interface{}`
+- Case insensitive: use `-i: true`
+- Context lines: use `-A`, `-B`, or `-C` parameters with content mode
+
+PAGINATION:
+- Use `head_limit` and `offset` for pagination
+- Response includes `total_matches` to know how many exist beyond the limit
 """
+
+    # Default exclusions - common non-source directories
+    DEFAULT_EXCLUSIONS = [
+        "node_modules", ".venv", "venv", ".git", "__pycache__",
+        ".mypy_cache", ".pytest_cache", ".tox", "dist", "build",
+        ".next", ".nuxt", "target", "vendor", ".gradle",
+        ".idea", ".vscode", "coverage", ".nyc_output",
+    ]
+
+    # Default result limits by output mode
+    DEFAULT_LIMITS = {
+        "files_with_matches": 200,
+        "content": 500,
+        "count": 200,
+    }
 
     # Common file type mappings for fallback
     TYPE_TO_GLOB = {
@@ -58,11 +84,21 @@ A powerful search tool built on ripgrep (with Python re fallback)
         "css": "*.css",
     }
 
+    # Default timeout for subprocess (seconds)
+    DEFAULT_TIMEOUT = 60
+
     def __init__(self, config: dict[str, Any]):
         """Initialize GrepTool with configuration."""
         self.config = config
         self.max_file_size = config.get("max_file_size", 10 * 1024 * 1024)  # 10MB default
         self.working_dir = config.get("working_dir", ".")
+        self.timeout = config.get("timeout", self.DEFAULT_TIMEOUT)
+        
+        # Configurable exclusions (can override defaults)
+        self.exclusions = config.get("exclusions", self.DEFAULT_EXCLUSIONS)
+        
+        # Configurable default limits (can override per-mode defaults)
+        self.default_limits = {**self.DEFAULT_LIMITS, **config.get("default_limits", {})}
 
         # Check if ripgrep is available
         rg_path = shutil.which("rg")
@@ -128,11 +164,15 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 },
                 "head_limit": {
                     "type": "integer",
-                    "description": 'Limit output to first N lines/entries, equivalent to "| head -N". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Default: 0 (unlimited). Use with total_matches field to implement pagination.',
+                    "description": 'Limit output to first N entries. Default limits apply per mode (200 files/counts, 500 content). Set to 0 for unlimited (use with caution). Use with total_matches field for pagination.',
                 },
                 "offset": {
                     "type": "integer",
-                    "description": 'Skip first N lines/entries before applying head_limit, equivalent to "| tail -n +N | head -N". Works across all output modes. Default: 0. Use with head_limit for pagination.',
+                    "description": 'Skip first N entries before applying head_limit. Default: 0. Use with head_limit for pagination.',
+                },
+                "include_ignored": {
+                    "type": "boolean",
+                    "description": "Search in normally-excluded directories (node_modules, .venv, .git, etc.). Default: false.",
                 },
             },
             "required": ["pattern"],
@@ -194,6 +234,15 @@ A powerful search tool built on ripgrep (with Python re fallback)
         if "type" in input:
             cmd.extend(["--type", input["type"]])
 
+        # Default exclusions (unless include_ignored is true)
+        if not input.get("include_ignored", False):
+            for exclusion in self.exclusions:
+                cmd.extend(["--glob", f"!{exclusion}/**"])
+                cmd.extend(["--glob", f"!**/{exclusion}/**"])
+
+        # Max file size
+        cmd.extend(["--max-filesize", str(self.max_file_size)])
+
         # JSON output only for content mode (other modes don't support it)
         if output_mode == "content":
             cmd.append("--json")
@@ -209,12 +258,13 @@ A powerful search tool built on ripgrep (with Python re fallback)
         cmd.append(search_path)
 
         try:
-            # Run ripgrep
+            # Run ripgrep with timeout
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 check=False,  # Don't raise on non-zero exit (no matches = exit code 1)
+                timeout=self.timeout,
             )
 
             # Check for errors
@@ -262,9 +312,11 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 # Capture total before pagination
                 total_matches = len(formatted_results)
 
-                # Handle head_limit and offset
+                # Handle head_limit and offset (apply default limit if not specified)
                 offset = input.get("offset", 0)
-                head_limit = input.get("head_limit", 0)
+                head_limit = input.get("head_limit")
+                if head_limit is None:
+                    head_limit = self.default_limits.get("content", 500)
 
                 if offset > 0:
                     formatted_results = formatted_results[offset:]
@@ -274,6 +326,8 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 output["total_matches"] = total_matches
                 output["matches_count"] = len(formatted_results)
                 output["results"] = formatted_results
+                if total_matches > len(formatted_results):
+                    output["results_capped"] = True
 
             elif output_mode == "files_with_matches":
                 # Parse plain text output (one file per line)
@@ -282,9 +336,11 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 # Capture total before pagination
                 total_files = len(files)
 
-                # Handle head_limit and offset
+                # Handle head_limit and offset (apply default limit if not specified)
                 offset = input.get("offset", 0)
-                head_limit = input.get("head_limit", 0)
+                head_limit = input.get("head_limit")
+                if head_limit is None:
+                    head_limit = self.default_limits.get("files_with_matches", 200)
 
                 if offset > 0:
                     files = files[offset:]
@@ -294,6 +350,8 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 output["total_matches"] = total_files
                 output["matches_count"] = len(files)
                 output["files"] = files
+                if total_files > len(files):
+                    output["results_capped"] = True
 
             elif output_mode == "count":
                 # Parse count output (format: "filepath:count")
@@ -314,9 +372,11 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 # Capture total before pagination
                 total_matches_sum = sum(all_counts.values())
 
-                # Handle head_limit and offset on the count entries
+                # Handle head_limit and offset on the count entries (apply default limit if not specified)
                 offset = input.get("offset", 0)
-                head_limit = input.get("head_limit", 0)
+                head_limit = input.get("head_limit")
+                if head_limit is None:
+                    head_limit = self.default_limits.get("count", 200)
 
                 count_items = list(all_counts.items())
                 if offset > 0:
@@ -328,6 +388,8 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 output["total_matches"] = total_matches_sum
                 output["matches_count"] = sum(counts.values())
                 output["counts"] = counts
+                if len(all_counts) > len(counts):
+                    output["results_capped"] = True
 
             return ToolResult(success=True, output=output)
 
@@ -383,7 +445,8 @@ A powerful search tool built on ripgrep (with Python re fallback)
             if not path.exists():
                 return ToolResult(success=False, error={"message": f"Path not found: {search_path}"})
 
-            files = self._find_files(path, glob_pattern)
+            include_ignored = input.get("include_ignored", False)
+            files = self._find_files(path, glob_pattern, include_ignored)
 
             # Search files based on mode
             output: dict[str, Any] = {
@@ -403,9 +466,11 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 # Capture total before pagination
                 total_matches = len(all_results)
 
-                # Apply offset and head_limit
+                # Apply offset and head_limit (apply default limit if not specified)
                 offset = input.get("offset", 0)
-                head_limit = input.get("head_limit", 0)
+                head_limit = input.get("head_limit")
+                if head_limit is None:
+                    head_limit = self.default_limits.get("content", 500)
                 if offset > 0:
                     all_results = all_results[offset:]
                 if head_limit > 0:
@@ -414,6 +479,8 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 output["total_matches"] = total_matches
                 output["matches_count"] = len(all_results)
                 output["results"] = all_results
+                if total_matches > len(all_results):
+                    output["results_capped"] = True
 
             elif output_mode == "files_with_matches":
                 # Find files that contain matches
@@ -425,9 +492,11 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 # Capture total before pagination
                 total_files = len(matched_files)
 
-                # Apply offset and head_limit to matched files
+                # Apply offset and head_limit to matched files (apply default limit if not specified)
                 offset = input.get("offset", 0)
-                head_limit = input.get("head_limit", 0)
+                head_limit = input.get("head_limit")
+                if head_limit is None:
+                    head_limit = self.default_limits.get("files_with_matches", 200)
                 if offset > 0:
                     matched_files = matched_files[offset:]
                 if head_limit > 0:
@@ -436,6 +505,8 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 output["total_matches"] = total_files
                 output["matches_count"] = len(matched_files)
                 output["files"] = matched_files
+                if total_files > len(matched_files):
+                    output["results_capped"] = True
 
             elif output_mode == "count":
                 # Count matches per file
@@ -448,9 +519,11 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 # Capture total before pagination
                 total_matches_sum = sum(all_counts.values())
 
-                # Apply offset and head_limit to count entries
+                # Apply offset and head_limit to count entries (apply default limit if not specified)
                 offset = input.get("offset", 0)
-                head_limit = input.get("head_limit", 0)
+                head_limit = input.get("head_limit")
+                if head_limit is None:
+                    head_limit = self.default_limits.get("count", 200)
                 count_items = list(all_counts.items())
                 if offset > 0:
                     count_items = count_items[offset:]
@@ -461,6 +534,8 @@ A powerful search tool built on ripgrep (with Python re fallback)
                 output["total_matches"] = total_matches_sum
                 output["matches_count"] = sum(counts.values())
                 output["counts"] = counts
+                if len(all_counts) > len(counts):
+                    output["results_capped"] = True
 
             return ToolResult(success=True, output=output)
 
@@ -469,8 +544,8 @@ A powerful search tool built on ripgrep (with Python re fallback)
         except Exception as e:
             return ToolResult(success=False, error={"message": f"Search failed: {str(e)}"})
 
-    def _find_files(self, path: Path, glob_pattern: str) -> list[Path]:
-        """Find files matching glob pattern."""
+    def _find_files(self, path: Path, glob_pattern: str, include_ignored: bool = False) -> list[Path]:
+        """Find files matching glob pattern, respecting exclusions."""
         files = []
 
         if path.is_file():
@@ -480,6 +555,17 @@ A powerful search tool built on ripgrep (with Python re fallback)
             for file_path in path.glob(glob_pattern):
                 if not file_path.is_file():
                     continue
+
+                # Check exclusions (unless include_ignored is True)
+                if not include_ignored:
+                    path_str = str(file_path)
+                    skip = False
+                    for exclusion in self.exclusions:
+                        if f"/{exclusion}/" in path_str or path_str.endswith(f"/{exclusion}"):
+                            skip = True
+                            break
+                    if skip:
+                        continue
 
                 # Check file size
                 try:
