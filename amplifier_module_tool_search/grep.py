@@ -28,9 +28,17 @@ CAPABILITIES:
 
 SCOPE AND LIMITS:
 - By default, excludes common non-source directories: node_modules, .venv, .git, __pycache__, build dirs
+- By default, excludes session directories and *.jsonl files (contain very long lines that cause context overflow)
 - Results are limited by default (200 files/counts, 500 content matches) to prevent context overflow
-- Set `include_ignored: true` to search excluded directories
+- Content mode has additional safety limits: 10KB max per line, 500KB max total output
+- Set `include_ignored: true` to search excluded directories and file patterns
 - Set explicit `head_limit: 0` for unlimited results (use with caution on large codebases)
+
+SAFETY FEATURES:
+- Long lines (>10KB) are automatically truncated in content mode
+- Total output is capped at 500KB to prevent context overflow
+- Session log files (events.jsonl) are excluded by default - they contain 100KB+ lines
+- Warnings are added to output if session logs are matched or output is truncated
 
 PATTERN SYNTAX:
 - Uses ripgrep regex (not grep) - literal braces need escaping: `interface\{\}` to find `interface{}`
@@ -44,10 +52,38 @@ PAGINATION:
 
     # Default exclusions - common non-source directories
     DEFAULT_EXCLUSIONS = [
-        "node_modules", ".venv", "venv", ".git", "__pycache__",
-        ".mypy_cache", ".pytest_cache", ".tox", "dist", "build",
-        ".next", ".nuxt", "target", "vendor", ".gradle",
-        ".idea", ".vscode", "coverage", ".nyc_output",
+        "node_modules",
+        ".venv",
+        "venv",
+        ".git",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+        "dist",
+        "build",
+        ".next",
+        ".nuxt",
+        "target",
+        "vendor",
+        ".gradle",
+        ".idea",
+        ".vscode",
+        "coverage",
+        ".nyc_output",
+        # Session log directories - lines can be 100KB+ each
+        "sessions",
+    ]
+
+    # File patterns excluded by default (can contain very long lines)
+    DEFAULT_FILE_EXCLUSIONS = [
+        "*.jsonl",  # Session logs, each line can be 100KB+
+    ]
+
+    # Patterns that indicate dangerous files (for warnings)
+    SESSION_LOG_PATTERNS = [
+        "events.jsonl",
+        "**/sessions/**",
     ]
 
     # Default result limits by output mode
@@ -56,6 +92,10 @@ PAGINATION:
         "content": 500,
         "count": 200,
     }
+
+    # Safety limits to prevent context overflow
+    DEFAULT_MAX_LINE_LENGTH = 10 * 1024  # 10KB max per line in content mode
+    DEFAULT_MAX_TOTAL_BYTES = 500 * 1024  # 500KB max total output
 
     # Common file type mappings for fallback
     TYPE_TO_GLOB = {
@@ -93,12 +133,19 @@ PAGINATION:
         self.max_file_size = config.get("max_file_size", 10 * 1024 * 1024)  # 10MB default
         self.working_dir = config.get("working_dir", ".")
         self.timeout = config.get("timeout", self.DEFAULT_TIMEOUT)
-        
+
         # Configurable exclusions (can override defaults)
         self.exclusions = config.get("exclusions", self.DEFAULT_EXCLUSIONS)
-        
+
+        # File pattern exclusions (e.g., *.jsonl)
+        self.file_exclusions = config.get("file_exclusions", self.DEFAULT_FILE_EXCLUSIONS)
+
         # Configurable default limits (can override per-mode defaults)
         self.default_limits = {**self.DEFAULT_LIMITS, **config.get("default_limits", {})}
+
+        # Safety limits for content mode
+        self.max_line_length = config.get("max_line_length", self.DEFAULT_MAX_LINE_LENGTH)
+        self.max_total_bytes = config.get("max_total_bytes", self.DEFAULT_MAX_TOTAL_BYTES)
 
         # Check if ripgrep is available
         rg_path = shutil.which("rg")
@@ -164,11 +211,11 @@ PAGINATION:
                 },
                 "head_limit": {
                     "type": "integer",
-                    "description": 'Limit output to first N entries. Default limits apply per mode (200 files/counts, 500 content). Set to 0 for unlimited (use with caution). Use with total_matches field for pagination.',
+                    "description": "Limit output to first N entries. Default limits apply per mode (200 files/counts, 500 content). Set to 0 for unlimited (use with caution). Use with total_matches field for pagination.",
                 },
                 "offset": {
                     "type": "integer",
-                    "description": 'Skip first N entries before applying head_limit. Default: 0. Use with head_limit for pagination.',
+                    "description": "Skip first N entries before applying head_limit. Default: 0. Use with head_limit for pagination.",
                 },
                 "include_ignored": {
                     "type": "boolean",
@@ -239,6 +286,10 @@ PAGINATION:
             for exclusion in self.exclusions:
                 cmd.extend(["--glob", f"!{exclusion}/**"])
                 cmd.extend(["--glob", f"!**/{exclusion}/**"])
+            # File pattern exclusions (e.g., *.jsonl with very long lines)
+            for file_pattern in self.file_exclusions:
+                cmd.extend(["--glob", f"!{file_pattern}"])
+                cmd.extend(["--glob", f"!**/{file_pattern}"])
 
         # Max file size
         cmd.extend(["--max-filesize", str(self.max_file_size)])
@@ -294,23 +345,46 @@ PAGINATION:
                         # Skip malformed lines
                         continue
 
-                # Format content with line numbers
+                # Format content with line numbers, applying safety limits
                 formatted_results = []
+                total_bytes = 0
+                bytes_capped = False
+                lines_truncated = 0
+                session_log_warning = False
+
                 for match in matches:
-                    path = match.get("path", {}).get("text", "")
+                    file_path = match.get("path", {}).get("text", "")
                     lines_data = match.get("lines", {})
                     line_number = match.get("line_number")
+                    content = lines_data.get("text", "").rstrip()
 
+                    # Check for session log files (warning only, since they should be excluded)
+                    if "events.jsonl" in file_path or "/sessions/" in file_path:
+                        session_log_warning = True
+
+                    # Truncate long lines to prevent context overflow
+                    original_length = len(content)
+                    if original_length > self.max_line_length:
+                        content = content[: self.max_line_length] + f"... [truncated, {original_length} bytes total]"
+                        lines_truncated += 1
+
+                    # Track total bytes and stop if exceeded
+                    content_bytes = len(content.encode("utf-8"))
+                    if total_bytes + content_bytes > self.max_total_bytes:
+                        bytes_capped = True
+                        break
+
+                    total_bytes += content_bytes
                     formatted_results.append(
                         {
-                            "file": path,
+                            "file": file_path,
                             "line_number": line_number,
-                            "content": lines_data.get("text", "").rstrip(),
+                            "content": content,
                         }
                     )
 
                 # Capture total before pagination
-                total_matches = len(formatted_results)
+                total_matches = len(matches)
 
                 # Handle head_limit and offset (apply default limit if not specified)
                 offset = input.get("offset", 0)
@@ -326,8 +400,20 @@ PAGINATION:
                 output["total_matches"] = total_matches
                 output["matches_count"] = len(formatted_results)
                 output["results"] = formatted_results
-                if total_matches > len(formatted_results):
+
+                # Add safety-related metadata
+                if total_matches > len(formatted_results) or bytes_capped:
                     output["results_capped"] = True
+                if bytes_capped:
+                    output["bytes_capped"] = True
+                    output["warning"] = f"Output truncated at {self.max_total_bytes} bytes to prevent context overflow"
+                if lines_truncated > 0:
+                    output["lines_truncated"] = lines_truncated
+                if session_log_warning:
+                    output["session_log_warning"] = (
+                        "Matched session log files (events.jsonl). "
+                        "These contain very long lines (100KB+). Consider using files_with_matches mode."
+                    )
 
             elif output_mode == "files_with_matches":
                 # Parse plain text output (one file per line)
@@ -455,13 +541,39 @@ PAGINATION:
             }
 
             if output_mode == "content":
-                # Collect all matches with content
+                # Collect all matches with content, applying safety limits
                 all_results = []
+                total_bytes = 0
+                bytes_capped = False
+                lines_truncated = 0
+                session_log_warning = False
+
                 for file_path in files:
+                    # Check for session log files
+                    path_str = str(file_path)
+                    if "events.jsonl" in path_str or "/sessions/" in path_str:
+                        session_log_warning = True
+
                     matches = self._search_file_content(
                         file_path, regex, show_line_numbers, context_before, context_after
                     )
-                    all_results.extend(matches)
+
+                    for match in matches:
+                        # Track truncated lines
+                        if match.get("truncated"):
+                            lines_truncated += 1
+
+                        # Track total bytes and stop if exceeded
+                        content_bytes = len(match.get("content", "").encode("utf-8"))
+                        if total_bytes + content_bytes > self.max_total_bytes:
+                            bytes_capped = True
+                            break
+
+                        total_bytes += content_bytes
+                        all_results.append(match)
+
+                    if bytes_capped:
+                        break
 
                 # Capture total before pagination
                 total_matches = len(all_results)
@@ -479,8 +591,20 @@ PAGINATION:
                 output["total_matches"] = total_matches
                 output["matches_count"] = len(all_results)
                 output["results"] = all_results
-                if total_matches > len(all_results):
+
+                # Add safety-related metadata
+                if total_matches > len(all_results) or bytes_capped:
                     output["results_capped"] = True
+                if bytes_capped:
+                    output["bytes_capped"] = True
+                    output["warning"] = f"Output truncated at {self.max_total_bytes} bytes to prevent context overflow"
+                if lines_truncated > 0:
+                    output["lines_truncated"] = lines_truncated
+                if session_log_warning:
+                    output["session_log_warning"] = (
+                        "Matched session log files (events.jsonl). "
+                        "These contain very long lines (100KB+). Consider using files_with_matches mode."
+                    )
 
             elif output_mode == "files_with_matches":
                 # Find files that contain matches
@@ -546,6 +670,8 @@ PAGINATION:
 
     def _find_files(self, path: Path, glob_pattern: str, include_ignored: bool = False) -> list[Path]:
         """Find files matching glob pattern, respecting exclusions."""
+        import fnmatch
+
         files = []
 
         if path.is_file():
@@ -560,8 +686,19 @@ PAGINATION:
                 if not include_ignored:
                     path_str = str(file_path)
                     skip = False
+
+                    # Directory exclusions
                     for exclusion in self.exclusions:
                         if f"/{exclusion}/" in path_str or path_str.endswith(f"/{exclusion}"):
+                            skip = True
+                            break
+                    if skip:
+                        continue
+
+                    # File pattern exclusions (e.g., *.jsonl)
+                    file_name = file_path.name
+                    for file_pattern in self.file_exclusions:
+                        if fnmatch.fnmatch(file_name, file_pattern):
                             skip = True
                             break
                     if skip:
@@ -620,13 +757,24 @@ PAGINATION:
 
             for i, line in enumerate(lines, 1):
                 if regex.search(line):
+                    content = line.rstrip()
+
+                    # Truncate long lines to prevent context overflow
+                    original_length = len(content)
+                    if original_length > self.max_line_length:
+                        content = content[: self.max_line_length] + f"... [truncated, {original_length} bytes total]"
+
                     result: dict[str, Any] = {
                         "file": str(file_path),
-                        "content": line.rstrip(),
+                        "content": content,
                     }
 
                     if show_line_numbers:
                         result["line_number"] = i
+
+                    # Mark if this was a truncated line
+                    if original_length > self.max_line_length:
+                        result["truncated"] = True
 
                     # Add context lines if requested
                     if context_before > 0 or context_after > 0:
@@ -636,10 +784,18 @@ PAGINATION:
 
                         context_lines = []
                         for j in range(start_idx, end_idx):
+                            ctx_content = lines[j].rstrip()
+                            # Also truncate context lines
+                            ctx_original_length = len(ctx_content)
+                            if ctx_original_length > self.max_line_length:
+                                ctx_content = (
+                                    ctx_content[: self.max_line_length]
+                                    + f"... [truncated, {ctx_original_length} bytes total]"
+                                )
                             context_lines.append(
                                 {
                                     "line_number": j + 1,
-                                    "content": lines[j].rstrip(),
+                                    "content": ctx_content,
                                     "is_match": (j + 1) == i,
                                 }
                             )
