@@ -84,6 +84,35 @@ PAGINATION:
         "css": "*.css",
     }
 
+    # Map common alternative type names to ripgrep-recognized types
+    # This handles cases where LLMs use long-form names like "typescript" instead of "ts"
+    TYPE_ALIASES = {
+        "typescript": "ts",
+        "javascript": "js",
+        "python": "py",
+        "ruby": "rb",
+        "markdown": "md",
+        "shell": "sh",
+        "bash": "sh",
+        "csharp": "cs",
+        "c#": "cs",
+        "c++": "cpp",
+        "cplusplus": "cpp",
+        "golang": "go",
+        "rs": "rust",  # ripgrep uses "rust" not "rs"
+        "yml": "yaml",  # ripgrep uses "yaml" not "yml"
+        "tsx": "ts",  # ripgrep's ts type includes tsx
+        "jsx": "js",  # ripgrep's js type includes jsx
+    }
+
+    # Known ripgrep built-in types (subset of most common ones)
+    # Full list can be obtained via `rg --type-list`
+    KNOWN_RG_TYPES = {
+        "c", "cpp", "cs", "css", "go", "h", "hpp", "html", "java", "js",
+        "json", "lua", "md", "php", "py", "rb", "rust", "sh", "sql",
+        "swift", "toml", "ts", "txt", "xml", "yaml",
+    }
+
     # Default timeout for subprocess (seconds)
     DEFAULT_TIMEOUT = 60
 
@@ -156,7 +185,7 @@ PAGINATION:
                 },
                 "type": {
                     "type": "string",
-                    "description": "File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than glob for standard file types.",
+                    "description": "File type to search (rg --type). Valid types: py, js, ts, go, rust, java, c, cpp, rb, sh, md, json, yaml, html, css, xml, php, sql, swift, lua, toml, txt. Also accepts aliases like 'python', 'typescript', 'javascript', 'ruby', 'markdown'.",
                 },
                 "multiline": {
                     "type": "boolean",
@@ -232,7 +261,28 @@ PAGINATION:
         if "glob" in input:
             cmd.extend(["--glob", input["glob"]])
         if "type" in input:
-            cmd.extend(["--type", input["type"]])
+            file_type = input["type"].lower()
+            # Normalize aliases (e.g., "typescript" -> "ts", "python" -> "py")
+            file_type = self.TYPE_ALIASES.get(file_type, file_type)
+            
+            if file_type in self.KNOWN_RG_TYPES:
+                # Use ripgrep's native type filtering
+                cmd.extend(["--type", file_type])
+            elif file_type in self.TYPE_TO_GLOB:
+                # Fall back to glob pattern for types we know but ripgrep might not
+                cmd.extend(["--glob", self.TYPE_TO_GLOB[file_type]])
+            else:
+                # Unknown type - return helpful error instead of letting ripgrep fail
+                known_types = sorted(self.KNOWN_RG_TYPES)
+                aliases = sorted(self.TYPE_ALIASES.keys())
+                return ToolResult(
+                    success=False,
+                    error={
+                        "message": f"Unrecognized file type: '{input['type']}'. "
+                        f"Valid types: {', '.join(known_types)}. "
+                        f"Also accepts aliases: {', '.join(aliases[:8])}..."
+                    },
+                )
 
         # Default exclusions (unless include_ignored is true)
         if not input.get("include_ignored", False):
@@ -422,9 +472,26 @@ PAGINATION:
         # Build glob pattern from type or glob parameter
         glob_pattern = input.get("glob", "**/*")
         if "type" in input:
-            type_glob = self.TYPE_TO_GLOB.get(input["type"])
+            file_type = input["type"].lower()
+            # Normalize aliases (e.g., "typescript" -> "ts", "python" -> "py")
+            file_type = self.TYPE_ALIASES.get(file_type, file_type)
+            
+            # Check if we have a glob mapping for this type
+            type_glob = self.TYPE_TO_GLOB.get(file_type)
             if type_glob:
                 glob_pattern = f"**/{type_glob}"
+            elif file_type not in self.KNOWN_RG_TYPES:
+                # Unknown type - return helpful error
+                known_types = sorted(self.KNOWN_RG_TYPES)
+                aliases = sorted(self.TYPE_ALIASES.keys())
+                return ToolResult(
+                    success=False,
+                    error={
+                        "message": f"Unrecognized file type: '{input['type']}'. "
+                        f"Valid types: {', '.join(known_types)}. "
+                        f"Also accepts aliases: {', '.join(aliases[:8])}..."
+                    },
+                )
 
         try:
             # Compile regex
