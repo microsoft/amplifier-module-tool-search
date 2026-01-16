@@ -100,8 +100,8 @@ SCOPE AND LIMITS:
             return ToolResult(success=False, error={"message": "Pattern is required"})
 
         try:
-            # Resolve relative paths against working_dir
-            path_obj = Path(base_path)
+            # Expand ~ to home directory, then resolve relative paths against working_dir
+            path_obj = Path(base_path).expanduser()
             if not path_obj.is_absolute():
                 path = Path(self.working_dir) / base_path
             else:
