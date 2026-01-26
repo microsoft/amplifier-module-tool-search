@@ -31,6 +31,13 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
     """
     config = config or {}
 
+    # If working_dir not explicitly set in config, use session.working_dir capability
+    # This enables server deployments where Path.cwd() returns the wrong directory
+    if "working_dir" not in config:
+        working_dir = coordinator.get_capability("session.working_dir")
+        if working_dir:
+            config = {**config, "working_dir": working_dir}
+
     # Get tool-specific config or use defaults
     grep_config = config.get("grep", {})
     glob_config = config.get("glob", {})
