@@ -56,8 +56,12 @@ modules:
   search:
     module: "amplifier-module-tool-search"
     source: "git+https://github.com/microsoft/amplifier-module-tool-search@main"
-    config: {}  # No config required - ripgrep handles everything
+    config:
+      working_dir: "."   # Working directory (defaults to session.working_dir capability)
+      max_results: 500   # Maximum results to return
 ```
+
+> **Note**: If `working_dir` is not set in config, the module uses the `session.working_dir` coordinator capability if available, falling back to `Path.cwd()`. This enables correct behavior in server/web deployments.
 
 Note: GrepTool automatically detects if ripgrep is available:
 - **With ripgrep**: Uses ripgrep for extreme performance (recommended)

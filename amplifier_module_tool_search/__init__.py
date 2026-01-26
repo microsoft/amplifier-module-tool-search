@@ -25,11 +25,23 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
     Args:
         coordinator: Module coordinator for registering tools
         config: Module configuration
+            - working_dir: Base directory for searches (default: ".")
+              If not set, falls back to session.working_dir capability.
+            - max_results: Maximum results per search (default: 500)
+            - grep: GrepTool-specific config overrides
+            - glob: GlobTool-specific config overrides
 
     Returns:
         None
     """
     config = config or {}
+
+    # If working_dir not explicitly set in config, use session.working_dir capability
+    # This enables server deployments where Path.cwd() returns the wrong directory
+    if "working_dir" not in config:
+        working_dir = coordinator.get_capability("session.working_dir")
+        if working_dir:
+            config = {**config, "working_dir": working_dir}
 
     # Get tool-specific config or use defaults
     grep_config = config.get("grep", {})
