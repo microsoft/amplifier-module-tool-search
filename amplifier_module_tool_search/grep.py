@@ -302,7 +302,7 @@ PAGINATION:
 
         # Path - resolve relative paths against working_dir
         search_path = input.get("path", ".")
-        path_obj = Path(search_path)
+        path_obj = Path(search_path).expanduser()
         if not path_obj.is_absolute():
             search_path = str(Path(self.working_dir) / search_path)
         cmd.append(search_path)
@@ -504,7 +504,7 @@ PAGINATION:
             regex = re.compile(pattern, flags)
 
             # Find files to search - resolve relative paths against working_dir
-            path_obj = Path(search_path)
+            path_obj = Path(search_path).expanduser()
             if not path_obj.is_absolute():
                 path = Path(self.working_dir) / search_path
             else:
