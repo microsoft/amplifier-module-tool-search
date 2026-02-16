@@ -101,7 +101,7 @@ SCOPE AND LIMITS:
 
         try:
             # Resolve relative paths against working_dir
-            path_obj = Path(base_path)
+            path_obj = Path(base_path).expanduser()
             if not path_obj.is_absolute():
                 path = Path(self.working_dir) / base_path
             else:
