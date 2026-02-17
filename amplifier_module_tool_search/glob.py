@@ -27,10 +27,25 @@ SCOPE AND LIMITS:
 
     # Default exclusions - common non-source directories (same as grep)
     DEFAULT_EXCLUSIONS = [
-        "node_modules", ".venv", "venv", ".git", "__pycache__",
-        ".mypy_cache", ".pytest_cache", ".tox", "dist", "build",
-        ".next", ".nuxt", "target", "vendor", ".gradle",
-        ".idea", ".vscode", "coverage", ".nyc_output",
+        "node_modules",
+        ".venv",
+        "venv",
+        ".git",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+        "dist",
+        "build",
+        ".next",
+        ".nuxt",
+        "target",
+        "vendor",
+        ".gradle",
+        ".idea",
+        ".vscode",
+        "coverage",
+        ".nyc_output",
     ]
 
     def __init__(self, config: dict[str, Any]):
@@ -39,7 +54,7 @@ SCOPE AND LIMITS:
         self.max_results = config.get("max_results", 500)
         self.allowed_paths = config.get("allowed_paths", ["."])
         self.working_dir = config.get("working_dir", ".")
-        
+
         # Configurable exclusions (can override defaults)
         self.exclusions = config.get("exclusions", self.DEFAULT_EXCLUSIONS)
 
@@ -97,7 +112,8 @@ SCOPE AND LIMITS:
         include_ignored = input.get("include_ignored", False)
 
         if not pattern:
-            return ToolResult(success=False, error={"message": "Pattern is required"})
+            error_msg = "Pattern is required"
+            return ToolResult(success=False, output=error_msg, error={"message": error_msg})
 
         try:
             # Resolve relative paths against working_dir
@@ -107,7 +123,8 @@ SCOPE AND LIMITS:
             else:
                 path = path_obj
             if not path.exists():
-                return ToolResult(success=False, error={"message": f"Path not found: {base_path}"})
+                error_msg = f"Path not found: {base_path}"
+                return ToolResult(success=False, output=error_msg, error={"message": error_msg})
 
             # Find matching paths - collect all first to get total count
             all_matches: list[dict[str, Any]] = []
@@ -161,7 +178,7 @@ SCOPE AND LIMITS:
             all_matches.sort(key=lambda m: m["mtime"], reverse=True)
 
             # Apply limit
-            matches = all_matches[:self.max_results]
+            matches = all_matches[: self.max_results]
 
             # Remove mtime from output (internal sorting key only)
             for match in matches:
@@ -183,4 +200,5 @@ SCOPE AND LIMITS:
             return ToolResult(success=True, output=output)
 
         except Exception as e:
-            return ToolResult(success=False, error={"message": f"Glob search failed: {e}"})
+            error_msg = f"Glob search failed: {e}"
+            return ToolResult(success=False, output=error_msg, error={"message": error_msg})
