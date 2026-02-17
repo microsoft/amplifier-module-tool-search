@@ -44,10 +44,25 @@ PAGINATION:
 
     # Default exclusions - common non-source directories
     DEFAULT_EXCLUSIONS = [
-        "node_modules", ".venv", "venv", ".git", "__pycache__",
-        ".mypy_cache", ".pytest_cache", ".tox", "dist", "build",
-        ".next", ".nuxt", "target", "vendor", ".gradle",
-        ".idea", ".vscode", "coverage", ".nyc_output",
+        "node_modules",
+        ".venv",
+        "venv",
+        ".git",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+        "dist",
+        "build",
+        ".next",
+        ".nuxt",
+        "target",
+        "vendor",
+        ".gradle",
+        ".idea",
+        ".vscode",
+        "coverage",
+        ".nyc_output",
     ]
 
     # Default result limits by output mode
@@ -108,9 +123,31 @@ PAGINATION:
     # Known ripgrep built-in types (subset of most common ones)
     # Full list can be obtained via `rg --type-list`
     KNOWN_RG_TYPES = {
-        "c", "cpp", "cs", "css", "go", "h", "hpp", "html", "java", "js",
-        "json", "lua", "md", "php", "py", "rb", "rust", "sh", "sql",
-        "swift", "toml", "ts", "txt", "xml", "yaml",
+        "c",
+        "cpp",
+        "cs",
+        "css",
+        "go",
+        "h",
+        "hpp",
+        "html",
+        "java",
+        "js",
+        "json",
+        "lua",
+        "md",
+        "php",
+        "py",
+        "rb",
+        "rust",
+        "sh",
+        "sql",
+        "swift",
+        "toml",
+        "ts",
+        "txt",
+        "xml",
+        "yaml",
     }
 
     # Default timeout for subprocess (seconds)
@@ -122,10 +159,10 @@ PAGINATION:
         self.max_file_size = config.get("max_file_size", 10 * 1024 * 1024)  # 10MB default
         self.working_dir = config.get("working_dir", ".")
         self.timeout = config.get("timeout", self.DEFAULT_TIMEOUT)
-        
+
         # Configurable exclusions (can override defaults)
         self.exclusions = config.get("exclusions", self.DEFAULT_EXCLUSIONS)
-        
+
         # Configurable default limits (can override per-mode defaults)
         self.default_limits = {**self.DEFAULT_LIMITS, **config.get("default_limits", {})}
 
@@ -193,11 +230,11 @@ PAGINATION:
                 },
                 "head_limit": {
                     "type": "integer",
-                    "description": 'Limit output to first N entries. Default limits apply per mode (200 files/counts, 500 content). Set to 0 for unlimited (use with caution). Use with total_matches field for pagination.',
+                    "description": "Limit output to first N entries. Default limits apply per mode (200 files/counts, 500 content). Set to 0 for unlimited (use with caution). Use with total_matches field for pagination.",
                 },
                 "offset": {
                     "type": "integer",
-                    "description": 'Skip first N entries before applying head_limit. Default: 0. Use with head_limit for pagination.',
+                    "description": "Skip first N entries before applying head_limit. Default: 0. Use with head_limit for pagination.",
                 },
                 "include_ignored": {
                     "type": "boolean",
@@ -222,7 +259,8 @@ PAGINATION:
         """Execute search using ripgrep binary (fast path)."""
         pattern = input.get("pattern")
         if not pattern:
-            return ToolResult(success=False, error={"message": "Pattern is required"})
+            error_msg = "Pattern is required"
+            return ToolResult(success=False, output=error_msg, error={"message": error_msg})
 
         # Build ripgrep command
         cmd = [self.rg_path]
@@ -264,7 +302,7 @@ PAGINATION:
             file_type = input["type"].lower()
             # Normalize aliases (e.g., "typescript" -> "ts", "python" -> "py")
             file_type = self.TYPE_ALIASES.get(file_type, file_type)
-            
+
             if file_type in self.KNOWN_RG_TYPES:
                 # Use ripgrep's native type filtering
                 cmd.extend(["--type", file_type])
@@ -320,7 +358,7 @@ PAGINATION:
             # Check for errors
             if result.returncode not in [0, 1]:  # 0 = matches, 1 = no matches
                 error_msg = result.stderr.strip() if result.stderr else "Unknown ripgrep error"
-                return ToolResult(success=False, error={"message": error_msg})
+                return ToolResult(success=False, output=error_msg, error={"message": error_msg})
 
             # Parse output based on mode
             output: dict[str, Any] = {
@@ -444,18 +482,22 @@ PAGINATION:
             return ToolResult(success=True, output=output)
 
         except subprocess.TimeoutExpired:
+            error_msg = "Search timed out. Try narrowing your search or using more specific patterns."
             return ToolResult(
                 success=False,
-                error={"message": "Search timed out. Try narrowing your search or using more specific patterns."},
+                output=error_msg,
+                error={"message": error_msg},
             )
         except Exception as e:
-            return ToolResult(success=False, error={"message": f"Search failed: {str(e)}"})
+            error_msg = f"Search failed: {str(e)}"
+            return ToolResult(success=False, output=error_msg, error={"message": error_msg})
 
     async def _execute_python(self, input: dict[str, Any]) -> ToolResult:
         """Execute search using Python re module (fallback path)."""
         pattern = input.get("pattern")
         if not pattern:
-            return ToolResult(success=False, error={"message": "Pattern is required"})
+            error_msg = "Pattern is required"
+            return ToolResult(success=False, output=error_msg, error={"message": error_msg})
 
         search_path = input.get("path", ".")
         output_mode = input.get("output_mode", "files_with_matches")
@@ -475,7 +517,7 @@ PAGINATION:
             file_type = input["type"].lower()
             # Normalize aliases (e.g., "typescript" -> "ts", "python" -> "py")
             file_type = self.TYPE_ALIASES.get(file_type, file_type)
-            
+
             # Check if we have a glob mapping for this type
             type_glob = self.TYPE_TO_GLOB.get(file_type)
             if type_glob:
@@ -510,7 +552,8 @@ PAGINATION:
             else:
                 path = path_obj
             if not path.exists():
-                return ToolResult(success=False, error={"message": f"Path not found: {search_path}"})
+                error_msg = f"Path not found: {search_path}"
+                return ToolResult(success=False, output=error_msg, error={"message": error_msg})
 
             include_ignored = input.get("include_ignored", False)
             files = self._find_files(path, glob_pattern, include_ignored)
@@ -607,9 +650,11 @@ PAGINATION:
             return ToolResult(success=True, output=output)
 
         except re.error as e:
-            return ToolResult(success=False, error={"message": f"Invalid regex pattern: {e}"})
+            error_msg = f"Invalid regex pattern: {e}"
+            return ToolResult(success=False, output=error_msg, error={"message": error_msg})
         except Exception as e:
-            return ToolResult(success=False, error={"message": f"Search failed: {str(e)}"})
+            error_msg = f"Search failed: {str(e)}"
+            return ToolResult(success=False, output=error_msg, error={"message": error_msg})
 
     def _find_files(self, path: Path, glob_pattern: str, include_ignored: bool = False) -> list[Path]:
         """Find files matching glob pattern, respecting exclusions."""
