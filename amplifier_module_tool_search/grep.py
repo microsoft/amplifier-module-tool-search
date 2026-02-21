@@ -44,10 +44,26 @@ PAGINATION:
 
     # Default exclusions - common non-source directories
     DEFAULT_EXCLUSIONS = [
-        "node_modules", ".venv", "venv", ".git", "__pycache__",
-        ".mypy_cache", ".pytest_cache", ".tox", "dist", "build",
-        ".next", ".nuxt", "target", "vendor", ".gradle",
-        ".idea", ".vscode", "coverage", ".nyc_output",
+        "node_modules",
+        ".venv",
+        "venv",
+        ".git",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+        "dist",
+        "build",
+        ".next",
+        ".nuxt",
+        "target",
+        "vendor",
+        ".gradle",
+        ".idea",
+        ".vscode",
+        "coverage",
+        ".nyc_output",
+        "sessions",
     ]
 
     # Default result limits by output mode
@@ -93,10 +109,10 @@ PAGINATION:
         self.max_file_size = config.get("max_file_size", 10 * 1024 * 1024)  # 10MB default
         self.working_dir = config.get("working_dir", ".")
         self.timeout = config.get("timeout", self.DEFAULT_TIMEOUT)
-        
+
         # Configurable exclusions (can override defaults)
         self.exclusions = config.get("exclusions", self.DEFAULT_EXCLUSIONS)
-        
+
         # Configurable default limits (can override per-mode defaults)
         self.default_limits = {**self.DEFAULT_LIMITS, **config.get("default_limits", {})}
 
@@ -164,11 +180,11 @@ PAGINATION:
                 },
                 "head_limit": {
                     "type": "integer",
-                    "description": 'Limit output to first N entries. Default limits apply per mode (200 files/counts, 500 content). Set to 0 for unlimited (use with caution). Use with total_matches field for pagination.',
+                    "description": "Limit output to first N entries. Default limits apply per mode (200 files/counts, 500 content). Set to 0 for unlimited (use with caution). Use with total_matches field for pagination.",
                 },
                 "offset": {
                     "type": "integer",
-                    "description": 'Skip first N entries before applying head_limit. Default: 0. Use with head_limit for pagination.',
+                    "description": "Skip first N entries before applying head_limit. Default: 0. Use with head_limit for pagination.",
                 },
                 "include_ignored": {
                     "type": "boolean",

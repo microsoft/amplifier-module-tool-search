@@ -27,10 +27,26 @@ SCOPE AND LIMITS:
 
     # Default exclusions - common non-source directories (same as grep)
     DEFAULT_EXCLUSIONS = [
-        "node_modules", ".venv", "venv", ".git", "__pycache__",
-        ".mypy_cache", ".pytest_cache", ".tox", "dist", "build",
-        ".next", ".nuxt", "target", "vendor", ".gradle",
-        ".idea", ".vscode", "coverage", ".nyc_output",
+        "node_modules",
+        ".venv",
+        "venv",
+        ".git",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+        "dist",
+        "build",
+        ".next",
+        ".nuxt",
+        "target",
+        "vendor",
+        ".gradle",
+        ".idea",
+        ".vscode",
+        "coverage",
+        ".nyc_output",
+        "sessions",
     ]
 
     def __init__(self, config: dict[str, Any]):
@@ -39,7 +55,7 @@ SCOPE AND LIMITS:
         self.max_results = config.get("max_results", 500)
         self.allowed_paths = config.get("allowed_paths", ["."])
         self.working_dir = config.get("working_dir", ".")
-        
+
         # Configurable exclusions (can override defaults)
         self.exclusions = config.get("exclusions", self.DEFAULT_EXCLUSIONS)
 
@@ -161,7 +177,7 @@ SCOPE AND LIMITS:
             all_matches.sort(key=lambda m: m["mtime"], reverse=True)
 
             # Apply limit
-            matches = all_matches[:self.max_results]
+            matches = all_matches[: self.max_results]
 
             # Remove mtime from output (internal sorting key only)
             for match in matches:
