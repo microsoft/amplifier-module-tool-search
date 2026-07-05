@@ -46,6 +46,7 @@ SCOPE AND LIMITS:
         ".vscode",
         "coverage",
         ".nyc_output",
+        "sessions",
     ]
 
     def __init__(self, config: dict[str, Any]):

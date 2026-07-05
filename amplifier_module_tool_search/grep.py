@@ -63,6 +63,7 @@ PAGINATION:
         ".vscode",
         "coverage",
         ".nyc_output",
+        "sessions",
     ]
 
     # Default result limits by output mode
