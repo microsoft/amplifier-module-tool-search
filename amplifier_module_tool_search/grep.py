@@ -342,7 +342,12 @@ PAGINATION:
         search_path = input.get("path", ".")
         path_obj = Path(search_path).expanduser()
         if not path_obj.is_absolute():
-            search_path = str(Path(self.working_dir) / search_path)
+            search_path = str(Path(self.working_dir) / path_obj)
+        else:
+            # An absolute path (incl. one produced by expanduser, e.g. "~/x")
+            # must be handed to rg in its EXPANDED form -- rg does no shell tilde
+            # expansion, so passing the raw "~/x" literal never resolves.
+            search_path = str(path_obj)
         cmd.append(search_path)
 
         try:
@@ -351,6 +356,13 @@ PAGINATION:
                 cmd,
                 capture_output=True,
                 text=True,
+                # ripgrep emits UTF-8. Without an explicit encoding, text=True
+                # decodes with the locale codepage (cp1252 on Windows), so any
+                # non-ASCII matched content raises UnicodeDecodeError inside
+                # subprocess.run before we can even read the result. errors=
+                # "replace" keeps a stray undecodable byte from failing the search.
+                encoding="utf-8",
+                errors="replace",
                 check=False,  # Don't raise on non-zero exit (no matches = exit code 1)
                 timeout=self.timeout,
             )
@@ -449,9 +461,13 @@ PAGINATION:
                 all_counts: dict[str, int] = {}
                 for line in lines:
                     if ":" in line:
-                        parts = line.split(":", 1)
+                        # rsplit on the LAST colon: rg emits "filepath:count", and on
+                        # Windows filepath contains a drive-letter colon (C:\...). A
+                        # split() on the FIRST colon would take "C" as the path and
+                        # ValueError on int("...:count"), silently dropping the entry.
+                        parts = line.rsplit(":", 1)
                         if len(parts) == 2:
-                            filepath, count_str = parts  # Fixed: ripgrep outputs filepath:count
+                            filepath, count_str = parts  # ripgrep outputs filepath:count
                             try:
                                 all_counts[filepath] = int(count_str)
                             except ValueError:
@@ -668,15 +684,14 @@ PAGINATION:
                 if not file_path.is_file():
                     continue
 
-                # Check exclusions (unless include_ignored is True)
+                # Check exclusions (unless include_ignored is True). Match on path
+                # COMPONENTS via Path.parts (splits on the OS separator -- "\" on
+                # Windows, "/" on POSIX) instead of a "/"-delimited substring, which
+                # never matched on Windows and silently disabled every default
+                # exclusion (node_modules, .venv, .git, __pycache__, ...).
                 if not include_ignored:
-                    path_str = str(file_path)
-                    skip = False
-                    for exclusion in self.exclusions:
-                        if f"/{exclusion}/" in path_str or path_str.endswith(f"/{exclusion}"):
-                            skip = True
-                            break
-                    if skip:
+                    parts = file_path.parts
+                    if any(exclusion in parts for exclusion in self.exclusions):
                         continue
 
                 # Check file size
