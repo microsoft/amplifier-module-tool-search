@@ -357,10 +357,14 @@ PAGINATION:
                 capture_output=True,
                 text=True,
                 # ripgrep emits UTF-8. Without an explicit encoding, text=True
-                # decodes with the locale codepage (cp1252 on Windows), so any
-                # non-ASCII matched content raises UnicodeDecodeError inside
-                # subprocess.run before we can even read the result. errors=
-                # "replace" keeps a stray undecodable byte from failing the search.
+                # decodes with the locale codepage (cp1252 on Windows). cp1252
+                # does NOT raise on rg's UTF-8 bytes -- it maps most of them to
+                # the wrong characters and returns successfully, so non-ASCII
+                # matched content is SILENTLY CORRUPTED (café -> cafÃ©) and the
+                # caller trusts the result. That silence is what makes this
+                # worth pinning. errors="replace" covers the narrow remainder:
+                # the five bytes undefined in cp1252 (0x81/0x8D/0x8F/0x90/0x9D),
+                # which would otherwise raise and fail the whole search.
                 encoding="utf-8",
                 errors="replace",
                 check=False,  # Don't raise on non-zero exit (no matches = exit code 1)
