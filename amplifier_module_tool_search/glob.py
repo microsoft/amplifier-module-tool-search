@@ -1,6 +1,6 @@
 """GlobTool - Find files matching glob patterns."""
 
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 from amplifier_core import ToolResult
@@ -84,13 +84,17 @@ SCOPE AND LIMITS:
             "required": ["pattern"],
         }
 
-    def _is_excluded(self, path_str: str) -> bool:
-        """Check if a path should be excluded based on exclusion patterns."""
-        for exclusion in self.exclusions:
-            # Check for exclusion as a directory component
-            if f"/{exclusion}/" in path_str or f"/{exclusion}" in path_str or path_str.startswith(f"{exclusion}/"):
-                return True
-        return False
+    def _is_excluded(self, path: PurePath) -> bool:
+        """Check if a path should be excluded based on exclusion patterns.
+
+        Matches on path COMPONENTS via Path.parts (splits on the OS separator --
+        "\\" on Windows, "/" on POSIX) instead of a "/"-delimited substring. The
+        old substring check never matched on Windows (WindowsPath.__str__ emits
+        "\\"), silently disabling every default exclusion (node_modules, .venv,
+        .git, __pycache__, ...) on 100% of Windows glob calls.
+        """
+        parts = path.parts
+        return any(exclusion in parts for exclusion in self.exclusions)
 
     async def execute(self, input: dict[str, Any]) -> ToolResult:
         """
@@ -129,11 +133,11 @@ SCOPE AND LIMITS:
             # Find matching paths - collect all first to get total count
             all_matches: list[dict[str, Any]] = []
             for match_path in path.glob(pattern):
-                # Convert to string for exclusion check (BEFORE stat() for performance)
+                # Rendered once here and reused for the output record below.
                 match_path_str = str(match_path)
 
                 # Apply default exclusions (unless include_ignored is True)
-                if not include_ignored and self._is_excluded(match_path_str):
+                if not include_ignored and self._is_excluded(match_path):
                     continue
 
                 # Apply type filter

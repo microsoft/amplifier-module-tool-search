@@ -60,6 +60,11 @@ class TestGrepExpandUser:
             }
         )
         assert result.success, f"Grep with ~ path failed: {result.error}"
+        # Teeth: an unexpanded "~" makes rg search a nonexistent dir and return
+        # zero files while still reporting success. Assert the file was found.
+        assert isinstance(result.output, dict)
+        assert result.output["matches_count"] == 1, f"expected 1 matching file, got {result.output}"
+        assert "hello.txt" in " ".join(result.output["files"])
 
     @pytest.mark.asyncio
     async def test_tilde_path_resolves_to_home_python_fallback(self, grep_tool: GrepTool, home_test_dir: Path) -> None:

@@ -5,7 +5,7 @@ import logging
 import re
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 from amplifier_core import ToolResult
@@ -342,7 +342,12 @@ PAGINATION:
         search_path = input.get("path", ".")
         path_obj = Path(search_path).expanduser()
         if not path_obj.is_absolute():
-            search_path = str(Path(self.working_dir) / search_path)
+            search_path = str(Path(self.working_dir) / path_obj)
+        else:
+            # An absolute path (incl. one produced by expanduser, e.g. "~/x")
+            # must be handed to rg in its EXPANDED form -- rg does no shell tilde
+            # expansion, so passing the raw "~/x" literal never resolves.
+            search_path = str(path_obj)
         cmd.append(search_path)
 
         try:
@@ -351,6 +356,17 @@ PAGINATION:
                 cmd,
                 capture_output=True,
                 text=True,
+                # ripgrep emits UTF-8. Without an explicit encoding, text=True
+                # decodes with the locale codepage (cp1252 on Windows). cp1252
+                # does NOT raise on rg's UTF-8 bytes -- it maps most of them to
+                # the wrong characters and returns successfully, so non-ASCII
+                # matched content is SILENTLY CORRUPTED (café -> cafÃ©) and the
+                # caller trusts the result. That silence is what makes this
+                # worth pinning. errors="replace" covers the narrow remainder:
+                # the five bytes undefined in cp1252 (0x81/0x8D/0x8F/0x90/0x9D),
+                # which would otherwise raise and fail the whole search.
+                encoding="utf-8",
+                errors="replace",
                 check=False,  # Don't raise on non-zero exit (no matches = exit code 1)
                 timeout=self.timeout,
             )
@@ -449,9 +465,13 @@ PAGINATION:
                 all_counts: dict[str, int] = {}
                 for line in lines:
                     if ":" in line:
-                        parts = line.split(":", 1)
+                        # rsplit on the LAST colon: rg emits "filepath:count", and on
+                        # Windows filepath contains a drive-letter colon (C:\...). A
+                        # split() on the FIRST colon would take "C" as the path and
+                        # ValueError on int("...:count"), silently dropping the entry.
+                        parts = line.rsplit(":", 1)
                         if len(parts) == 2:
-                            filepath, count_str = parts  # Fixed: ripgrep outputs filepath:count
+                            filepath, count_str = parts  # ripgrep outputs filepath:count
                             try:
                                 all_counts[filepath] = int(count_str)
                             except ValueError:
@@ -656,6 +676,18 @@ PAGINATION:
             error_msg = f"Search failed: {str(e)}"
             return ToolResult(success=False, output=error_msg, error={"message": error_msg})
 
+    def _is_excluded(self, path: PurePath) -> bool:
+        """Check if a path should be excluded based on exclusion patterns.
+
+        Matches on path COMPONENTS via Path.parts (splits on the OS separator --
+        "\\" on Windows, "/" on POSIX) instead of a "/"-delimited substring. The
+        old substring check never matched on Windows (WindowsPath.__str__ emits
+        "\\"), silently disabling every default exclusion (node_modules, .venv,
+        .git, __pycache__, ...) on 100% of Windows grep calls.
+        """
+        parts = path.parts
+        return any(exclusion in parts for exclusion in self.exclusions)
+
     def _find_files(self, path: Path, glob_pattern: str, include_ignored: bool = False) -> list[Path]:
         """Find files matching glob pattern, respecting exclusions."""
         files = []
@@ -668,16 +700,9 @@ PAGINATION:
                 if not file_path.is_file():
                     continue
 
-                # Check exclusions (unless include_ignored is True)
-                if not include_ignored:
-                    path_str = str(file_path)
-                    skip = False
-                    for exclusion in self.exclusions:
-                        if f"/{exclusion}/" in path_str or path_str.endswith(f"/{exclusion}"):
-                            skip = True
-                            break
-                    if skip:
-                        continue
+                # Apply default exclusions (unless include_ignored is True)
+                if not include_ignored and self._is_excluded(file_path):
+                    continue
 
                 # Check file size
                 try:
