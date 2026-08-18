@@ -271,6 +271,13 @@ PAGINATION:
             cmd.append("--files-with-matches")
         elif output_mode == "count":
             cmd.append("--count")
+            # -H forces the "path:count" prefix. Without it, rg omits the
+            # filename when given a single explicit file, emitting a bare
+            # "3". The count parser below keys on the colon, so an
+            # unprefixed line is dropped and the tool reports 0 matches for
+            # a file that has some. Directory and multi-file searches are
+            # unaffected -- they already print the prefix, so -H is a no-op.
+            cmd.append("-H")
         # content mode is default, no flag needed
 
         # Case insensitive
