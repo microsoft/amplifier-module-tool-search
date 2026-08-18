@@ -133,7 +133,7 @@ SCOPE AND LIMITS:
             # Find matching paths - collect all first to get total count
             all_matches: list[dict[str, Any]] = []
             for match_path in path.glob(pattern):
-                # Convert to string for exclusion check (BEFORE stat() for performance)
+                # Rendered once here and reused for the output record below.
                 match_path_str = str(match_path)
 
                 # Apply default exclusions (unless include_ignored is True)

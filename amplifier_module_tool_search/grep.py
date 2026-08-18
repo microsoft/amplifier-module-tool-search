@@ -5,7 +5,7 @@ import logging
 import re
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 from amplifier_core import ToolResult
@@ -672,6 +672,18 @@ PAGINATION:
             error_msg = f"Search failed: {str(e)}"
             return ToolResult(success=False, output=error_msg, error={"message": error_msg})
 
+    def _is_excluded(self, path: PurePath) -> bool:
+        """Check if a path should be excluded based on exclusion patterns.
+
+        Matches on path COMPONENTS via Path.parts (splits on the OS separator --
+        "\\" on Windows, "/" on POSIX) instead of a "/"-delimited substring. The
+        old substring check never matched on Windows (WindowsPath.__str__ emits
+        "\\"), silently disabling every default exclusion (node_modules, .venv,
+        .git, __pycache__, ...) on 100% of Windows grep calls.
+        """
+        parts = path.parts
+        return any(exclusion in parts for exclusion in self.exclusions)
+
     def _find_files(self, path: Path, glob_pattern: str, include_ignored: bool = False) -> list[Path]:
         """Find files matching glob pattern, respecting exclusions."""
         files = []
@@ -684,15 +696,9 @@ PAGINATION:
                 if not file_path.is_file():
                     continue
 
-                # Check exclusions (unless include_ignored is True). Match on path
-                # COMPONENTS via Path.parts (splits on the OS separator -- "\" on
-                # Windows, "/" on POSIX) instead of a "/"-delimited substring, which
-                # never matched on Windows and silently disabled every default
-                # exclusion (node_modules, .venv, .git, __pycache__, ...).
-                if not include_ignored:
-                    parts = file_path.parts
-                    if any(exclusion in parts for exclusion in self.exclusions):
-                        continue
+                # Apply default exclusions (unless include_ignored is True)
+                if not include_ignored and self._is_excluded(file_path):
+                    continue
 
                 # Check file size
                 try:
