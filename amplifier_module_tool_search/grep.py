@@ -29,6 +29,8 @@ CAPABILITIES:
 SCOPE AND LIMITS:
 - By default, excludes common non-source directories: node_modules, .venv, .git, __pycache__, build dirs
 - Results are limited by default (200 files/counts, 500 content matches) to prevent context overflow
+- In content mode, each matched line is truncated to 2000 characters (marked "... [truncated]") and the total
+  serialized result is capped at 100,000 bytes -- both configurable, set to 0 to disable
 - Set `include_ignored: true` to search excluded directories
 - Set explicit `head_limit: 0` for unlimited results (use with caution on large codebases)
 
@@ -71,6 +73,13 @@ PAGINATION:
         "content": 500,
         "count": 200,
     }
+
+    # Default per-line truncation for content mode (matches tool-filesystem read_file)
+    DEFAULT_MAX_LINE_CHARS = 2000
+
+    # Default total serialized result size cap for content mode, in bytes
+    # (matches tool-bash's default output byte limit)
+    DEFAULT_MAX_RESULT_BYTES = 100_000
 
     # Common file type mappings for fallback
     TYPE_TO_GLOB = {
@@ -165,6 +174,11 @@ PAGINATION:
 
         # Configurable default limits (can override per-mode defaults)
         self.default_limits = {**self.DEFAULT_LIMITS, **config.get("default_limits", {})}
+
+        # Configurable per-line and total-result size bounds for content mode.
+        # 0 disables the corresponding bound.
+        self.max_line_chars = config.get("max_line_chars", self.DEFAULT_MAX_LINE_CHARS)
+        self.max_result_bytes = config.get("max_result_bytes", self.DEFAULT_MAX_RESULT_BYTES)
 
         # Check if ripgrep is available
         rg_path = shutil.which("rg")
@@ -416,7 +430,7 @@ PAGINATION:
                         {
                             "file": path,
                             "line_number": line_number,
-                            "content": lines_data.get("text", "").rstrip(),
+                            "content": self._clip_line(lines_data.get("text", "").rstrip()),
                         }
                     )
 
@@ -434,11 +448,16 @@ PAGINATION:
                 if head_limit > 0:
                     formatted_results = formatted_results[:head_limit]
 
+                results_before_byte_cap = len(formatted_results)
+                formatted_results, bytes_truncated = self._cap_result_bytes(formatted_results)
+
                 output["total_matches"] = total_matches
                 output["matches_count"] = len(formatted_results)
                 output["results"] = formatted_results
-                if total_matches > len(formatted_results):
+                if total_matches > results_before_byte_cap:
                     output["results_capped"] = True
+                if bytes_truncated:
+                    output["results_truncated_bytes"] = True
 
             elif output_mode == "files_with_matches":
                 # Parse plain text output (one file per line)
@@ -613,11 +632,16 @@ PAGINATION:
                 if head_limit > 0:
                     all_results = all_results[:head_limit]
 
+                results_before_byte_cap = len(all_results)
+                all_results, bytes_truncated = self._cap_result_bytes(all_results)
+
                 output["total_matches"] = total_matches
                 output["matches_count"] = len(all_results)
                 output["results"] = all_results
-                if total_matches > len(all_results):
+                if total_matches > results_before_byte_cap:
                     output["results_capped"] = True
+                if bytes_truncated:
+                    output["results_truncated_bytes"] = True
 
             elif output_mode == "files_with_matches":
                 # Find files that contain matches
@@ -682,6 +706,44 @@ PAGINATION:
         except Exception as e:
             error_msg = f"Search failed: {str(e)}"
             return ToolResult(success=False, output=error_msg, error={"message": error_msg})
+
+    def _clip_line(self, text: str) -> str:
+        """Truncate a single line of content to max_line_chars.
+
+        Mirrors tool-filesystem's read_file truncation (same length default,
+        same marker) so a single minified/generated line can't blow up a
+        content-mode result. max_line_chars == 0 disables clipping.
+        """
+        if self.max_line_chars <= 0 or len(text) <= self.max_line_chars:
+            return text
+        return text[: self.max_line_chars] + "... [truncated]"
+
+    def _cap_result_bytes(self, results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+        """Truncate a content-mode results list to a total serialized byte budget.
+
+        Applied AFTER head_limit/offset slicing. Per-line clipping alone is not
+        enough: the default content head_limit (500 matches) x max_line_chars
+        (2000 chars) is still a ~1MB ceiling. This walks the already-sliced
+        list, accumulating each item's serialized size, and stops adding once
+        max_result_bytes would be exceeded -- always keeping at least the
+        first item so the response is never silently emptied.
+
+        max_result_bytes == 0 disables the cap.
+
+        Returns (kept_results, was_truncated).
+        """
+        if self.max_result_bytes <= 0:
+            return results, False
+
+        kept: list[dict[str, Any]] = []
+        total_bytes = 0
+        for item in results:
+            item_bytes = len(json.dumps(item).encode("utf-8"))
+            if kept and total_bytes + item_bytes > self.max_result_bytes:
+                return kept, True
+            kept.append(item)
+            total_bytes += item_bytes
+        return kept, False
 
     def _is_excluded(self, path: PurePath) -> bool:
         """Check if a path should be excluded based on exclusion patterns.
@@ -766,7 +828,7 @@ PAGINATION:
                 if regex.search(line):
                     result: dict[str, Any] = {
                         "file": str(file_path),
-                        "content": line.rstrip(),
+                        "content": self._clip_line(line.rstrip()),
                     }
 
                     if show_line_numbers:
@@ -783,7 +845,7 @@ PAGINATION:
                             context_lines.append(
                                 {
                                     "line_number": j + 1,
-                                    "content": lines[j].rstrip(),
+                                    "content": self._clip_line(lines[j].rstrip()),
                                     "is_match": (j + 1) == i,
                                 }
                             )
