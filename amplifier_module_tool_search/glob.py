@@ -1,6 +1,8 @@
 """GlobTool - Find files matching glob patterns."""
 
+import asyncio
 from pathlib import Path, PurePath
+from threading import Event
 from typing import Any
 
 from amplifier_core import ToolResult
@@ -97,6 +99,15 @@ SCOPE AND LIMITS:
         return any(exclusion in parts for exclusion in self.exclusions)
 
     async def execute(self, input: dict[str, Any]) -> ToolResult:
+        # Directory traversal and stat calls can block on local or mounted
+        # filesystems. Keep the session loop free to accept input and controls.
+        cancelled = Event()
+        try:
+            return await asyncio.to_thread(self._execute, input, cancelled)
+        finally:
+            cancelled.set()
+
+    def _execute(self, input: dict[str, Any], cancelled: Event) -> ToolResult:
         """
         Find files matching pattern.
 
@@ -133,6 +144,10 @@ SCOPE AND LIMITS:
             # Find matching paths - collect all first to get total count
             all_matches: list[dict[str, Any]] = []
             for match_path in path.glob(pattern):
+                # Cancelling the coroutine cannot interrupt an OS filesystem
+                # call. Stop collecting as soon as that call returns a result.
+                if cancelled.is_set():
+                    return ToolResult(success=False, error={"message": "Glob search was cancelled"})
                 # Rendered once here and reused for the output record below.
                 match_path_str = str(match_path)
 

@@ -291,6 +291,11 @@ Find files matching glob patterns.
 - File size information
 - Configurable result limits
 
+Filesystem traversal runs outside the session event loop, so a slow search does
+not prevent the session from accepting follow-up input or cancellation. On
+cancellation, collection stops when the current filesystem operation returns;
+an operating-system I/O wait cannot be interrupted by cancelling the coroutine.
+
 **Output:**
 ```json
 {
