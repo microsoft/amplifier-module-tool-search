@@ -10,6 +10,8 @@ from typing import Any
 
 from amplifier_core import ToolResult
 
+from .paths import ACCESS_DENIED_MESSAGE, PathAccessPolicy, PathAuthorizationError, validate_glob_pattern
+
 logger = logging.getLogger(__name__)
 
 
@@ -167,6 +169,8 @@ PAGINATION:
         self.config = config
         self.max_file_size = config.get("max_file_size", 10 * 1024 * 1024)  # 10MB default
         self.working_dir = config.get("working_dir", ".")
+        self.allowed_paths = config.get("allowed_paths", ["."])
+        self.path_policy = PathAccessPolicy(self.working_dir, self.allowed_paths)
         self.timeout = config.get("timeout", self.DEFAULT_TIMEOUT)
 
         # Configurable exclusions (can override defaults)
@@ -265,9 +269,18 @@ PAGINATION:
         Args:
             input: Dictionary containing search parameters as defined in input_schema
         """
-        if self.use_ripgrep:
-            return await self._execute_ripgrep(input)
-        return await self._execute_python(input)
+        try:
+            if "glob" in input:
+                validate_glob_pattern(input["glob"])
+            if self.use_ripgrep:
+                return await self._execute_ripgrep(input)
+            return await self._execute_python(input)
+        except PathAuthorizationError:
+            return ToolResult(
+                success=False,
+                output=ACCESS_DENIED_MESSAGE,
+                error={"message": ACCESS_DENIED_MESSAGE},
+            )
 
     async def _execute_ripgrep(self, input: dict[str, Any]) -> ToolResult:
         """Execute search using ripgrep binary (fast path)."""
@@ -359,17 +372,8 @@ PAGINATION:
         # Pattern
         cmd.append(pattern)
 
-        # Path - resolve relative paths against working_dir
-        search_path = input.get("path", ".")
-        path_obj = Path(search_path).expanduser()
-        if not path_obj.is_absolute():
-            search_path = str(Path(self.working_dir) / path_obj)
-        else:
-            # An absolute path (incl. one produced by expanduser, e.g. "~/x")
-            # must be handed to rg in its EXPANDED form -- rg does no shell tilde
-            # expansion, so passing the raw "~/x" literal never resolves.
-            search_path = str(path_obj)
-        cmd.append(search_path)
+        search_path = self.path_policy.resolve(input.get("path", "."))
+        cmd.append(str(search_path))
 
         try:
             # Run ripgrep with timeout
@@ -591,12 +595,7 @@ PAGINATION:
 
             regex = re.compile(pattern, flags)
 
-            # Find files to search - resolve relative paths against working_dir
-            path_obj = Path(search_path).expanduser()
-            if not path_obj.is_absolute():
-                path = Path(self.working_dir) / search_path
-            else:
-                path = path_obj
+            path = self.path_policy.resolve(search_path)
             if not path.exists():
                 error_msg = f"Path not found: {search_path}"
                 return ToolResult(success=False, output=error_msg, error={"message": error_msg})
@@ -700,6 +699,8 @@ PAGINATION:
 
             return ToolResult(success=True, output=output)
 
+        except PathAuthorizationError:
+            raise
         except re.error as e:
             error_msg = f"Invalid regex pattern: {e}"
             return ToolResult(success=False, output=error_msg, error={"message": error_msg})
@@ -766,6 +767,8 @@ PAGINATION:
 
         try:
             for file_path in path.glob(glob_pattern):
+                if not self.path_policy.is_allowed(file_path):
+                    continue
                 if not file_path.is_file():
                     continue
 
