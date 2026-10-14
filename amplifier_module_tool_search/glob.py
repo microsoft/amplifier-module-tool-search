@@ -1,11 +1,13 @@
 """GlobTool - Find files matching glob patterns."""
 
 import asyncio
-from pathlib import Path, PurePath
+from pathlib import PurePath
 from threading import Event
 from typing import Any
 
 from amplifier_core import ToolResult
+
+from .paths import ACCESS_DENIED_MESSAGE, PathAccessPolicy, PathAuthorizationError, validate_glob_pattern
 
 
 class GlobTool:
@@ -56,6 +58,7 @@ SCOPE AND LIMITS:
         self.max_results = config.get("max_results", 500)
         self.allowed_paths = config.get("allowed_paths", ["."])
         self.working_dir = config.get("working_dir", ".")
+        self.path_policy = PathAccessPolicy(self.working_dir, self.allowed_paths)
 
         # Configurable exclusions (can override defaults)
         self.exclusions = config.get("exclusions", self.DEFAULT_EXCLUSIONS)
@@ -131,12 +134,8 @@ SCOPE AND LIMITS:
             return ToolResult(success=False, output=error_msg, error={"message": error_msg})
 
         try:
-            # Resolve relative paths against working_dir
-            path_obj = Path(base_path).expanduser()
-            if not path_obj.is_absolute():
-                path = Path(self.working_dir) / base_path
-            else:
-                path = path_obj
+            path = self.path_policy.resolve(base_path)
+            validate_glob_pattern(pattern)
             if not path.exists():
                 error_msg = f"Path not found: {base_path}"
                 return ToolResult(success=False, output=error_msg, error={"message": error_msg})
@@ -148,6 +147,8 @@ SCOPE AND LIMITS:
                 # call. Stop collecting as soon as that call returns a result.
                 if cancelled.is_set():
                     return ToolResult(success=False, error={"message": "Glob search was cancelled"})
+                if not self.path_policy.is_allowed(match_path):
+                    continue
                 # Rendered once here and reused for the output record below.
                 match_path_str = str(match_path)
 
@@ -218,6 +219,12 @@ SCOPE AND LIMITS:
 
             return ToolResult(success=True, output=output)
 
+        except PathAuthorizationError:
+            return ToolResult(
+                success=False,
+                output=ACCESS_DENIED_MESSAGE,
+                error={"message": ACCESS_DENIED_MESSAGE},
+            )
         except Exception as e:
             error_msg = f"Glob search failed: {e}"
             return ToolResult(success=False, output=error_msg, error={"message": error_msg})

@@ -1,83 +1,52 @@
-"""Tests for ~ (home directory) expansion in search tools."""
+"""Tests for authorized ~ (home directory) expansion in search tools."""
 
-import shutil
-import uuid
-from collections.abc import Generator
 from pathlib import Path
 
 import pytest
 
 from amplifier_module_tool_search.glob import GlobTool
 from amplifier_module_tool_search.grep import GrepTool
+from amplifier_module_tool_search.paths import ACCESS_DENIED_MESSAGE
 
 
-class TestGlobExpandUser:
-    """GlobTool expands ~ in path parameters."""
+@pytest.mark.asyncio
+async def test_glob_rejects_home_when_not_allowed(tmp_path: Path) -> None:
+    result = await GlobTool({"working_dir": str(tmp_path)}).execute({"pattern": "*", "path": "~"})
 
-    @pytest.fixture
-    def glob_tool(self, tmp_path: Path) -> GlobTool:
-        tool = GlobTool({"working_dir": str(tmp_path)})
-        return tool
-
-    @pytest.mark.asyncio
-    async def test_tilde_path_resolves_to_home(self, glob_tool: GlobTool, tmp_path: Path) -> None:
-        """Passing ~ as path resolves to home directory, not literal '~' dir."""
-        home = Path.home()
-        result = await glob_tool.execute({"pattern": "*", "path": "~"})
-        # Should NOT fail with "Path not found: ~"
-        if not result.success:
-            error_msg = result.error.get("message", "") if result.error else ""
-            assert "not found" not in error_msg.lower(), f"~ was not expanded to {home}: {error_msg}"
+    assert not result.success
+    assert result.output == ACCESS_DENIED_MESSAGE
+    assert str(Path.home()) not in str(result.output)
 
 
-class TestGrepExpandUser:
-    """GrepTool expands ~ in path parameters."""
+@pytest.mark.asyncio
+async def test_glob_allows_home_when_explicitly_configured(tmp_path: Path) -> None:
+    result = await GlobTool({"working_dir": str(tmp_path), "allowed_paths": [str(Path.home())]}).execute(
+        {"pattern": "__definitely_missing_search_test_*", "path": "~"}
+    )
 
-    @pytest.fixture
-    def grep_tool(self) -> GrepTool:
-        tool = GrepTool({"working_dir": "."})
-        return tool
+    assert result.success
+    assert isinstance(result.output, dict)
+    assert result.output["base_path"] == str(Path.home().resolve())
 
-    @pytest.fixture
-    def home_test_dir(self) -> Generator[Path, None, None]:
-        """Create a temporary test directory under $HOME so ~/... paths work."""
-        unique = f".test_expanduser_{uuid.uuid4().hex[:8]}"
-        test_dir = Path.home() / unique
-        test_dir.mkdir()
-        yield test_dir
-        shutil.rmtree(test_dir, ignore_errors=True)
 
-    @pytest.mark.asyncio
-    async def test_tilde_path_resolves_to_home_ripgrep(self, grep_tool: GrepTool, home_test_dir: Path) -> None:
-        """Passing ~ as path resolves to home dir in ripgrep code path."""
-        (home_test_dir / "hello.txt").write_text("findme_token_abc123", encoding="utf-8")
+@pytest.mark.parametrize("use_ripgrep", [True, False], ids=["ripgrep", "python"])
+@pytest.mark.asyncio
+async def test_grep_rejects_home_when_not_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_ripgrep: bool
+) -> None:
+    tool = GrepTool({"working_dir": str(tmp_path)})
+    tool.use_ripgrep = use_ripgrep
+    subprocess_called = False
 
-        tilde_path = "~/" + home_test_dir.name
-        result = await grep_tool.execute(
-            {
-                "pattern": "findme_token_abc123",
-                "path": tilde_path,
-            }
-        )
-        assert result.success, f"Grep with ~ path failed: {result.error}"
-        # Teeth: an unexpanded "~" makes rg search a nonexistent dir and return
-        # zero files while still reporting success. Assert the file was found.
-        assert isinstance(result.output, dict)
-        assert result.output["matches_count"] == 1, f"expected 1 matching file, got {result.output}"
-        assert "hello.txt" in " ".join(result.output["files"])
+    def unexpected_subprocess(*args: object, **kwargs: object) -> None:
+        nonlocal subprocess_called
+        subprocess_called = True
 
-    @pytest.mark.asyncio
-    async def test_tilde_path_resolves_to_home_python_fallback(self, grep_tool: GrepTool, home_test_dir: Path) -> None:
-        """Passing ~ as path resolves to home dir in Python fallback code path."""
-        grep_tool.use_ripgrep = False
+    monkeypatch.setattr("amplifier_module_tool_search.grep.subprocess.run", unexpected_subprocess)
 
-        (home_test_dir / "hello.txt").write_text("findme_token_def456", encoding="utf-8")
+    result = await tool.execute({"pattern": "secret", "path": "~", "output_mode": "content"})
 
-        tilde_path = "~/" + home_test_dir.name
-        result = await grep_tool.execute(
-            {
-                "pattern": "findme_token_def456",
-                "path": tilde_path,
-            }
-        )
-        assert result.success, f"Grep (Python fallback) with ~ path failed: {result.error}"
+    assert not result.success
+    assert result.output == ACCESS_DENIED_MESSAGE
+    assert str(Path.home()) not in str(result.output)
+    assert not subprocess_called

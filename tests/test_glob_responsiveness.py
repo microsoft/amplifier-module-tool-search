@@ -21,7 +21,9 @@ async def test_slow_glob_keeps_event_loop_responsive(tmp_path, monkeypatch):
         yield from original(path, pattern)
 
     monkeypatch.setattr(Path, "glob", slow_glob)
-    task = asyncio.create_task(GlobTool({}).execute({"path": str(tmp_path), "pattern": "*.txt"}))
+    task = asyncio.create_task(
+        GlobTool({"working_dir": str(tmp_path)}).execute({"path": str(tmp_path), "pattern": "*.txt"})
+    )
     try:
         await asyncio.to_thread(entered.wait, 2)
         # An input/control coroutine must run while the filesystem is blocked.
@@ -51,7 +53,9 @@ async def test_cancelled_glob_stops_consuming_results(tmp_path, monkeypatch):
             finished.set()
 
     monkeypatch.setattr(Path, "glob", slow_glob)
-    task = asyncio.create_task(GlobTool({}).execute({"path": str(tmp_path), "pattern": "*.txt"}))
+    task = asyncio.create_task(
+        GlobTool({"working_dir": str(tmp_path)}).execute({"path": str(tmp_path), "pattern": "*.txt"})
+    )
     try:
         await asyncio.to_thread(entered.wait, 2)
         task.cancel()

@@ -342,7 +342,8 @@ Both tools handle errors gracefully:
 - No arbitrary code execution (uses trusted tools: ripgrep binary or Python re module)
 - Result limits prevent memory exhaustion
 - File size limits prevent memory exhaustion (configurable, default 10MB)
-- Path traversal handled safely by both ripgrep and Python Path library
+- Search paths are canonicalized and restricted to `allowed_paths` (the working directory by default)
+- Absolute paths, traversal, tilde expansion, and symlink/junction targets are rejected when they resolve outside allowed roots
 
 ## Testing
 
