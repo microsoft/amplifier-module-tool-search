@@ -369,8 +369,8 @@ PAGINATION:
         if output_mode == "content":
             cmd.append("--json")
 
-        # Pattern
-        cmd.append(pattern)
+        # Bind user text as a regexp, never as a ripgrep option.
+        cmd.extend(["--regexp", pattern, "--"])
 
         search_path = self.path_policy.resolve(input.get("path", "."))
         cmd.append(str(search_path))

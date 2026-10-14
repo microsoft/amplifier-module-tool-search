@@ -216,6 +216,25 @@ class RecordingCoordinator:
         self.tools[name] = tool
 
 
+@pytest.mark.parametrize("pattern", ["--files", "--follow", "--pre=unexpected", "-n"])
+@pytest.mark.parametrize("output_mode", ["files_with_matches", "content", "count"])
+@pytest.mark.asyncio
+async def test_real_ripgrep_treats_leading_dash_patterns_as_data(
+    tmp_path: Path, pattern: str, output_mode: str
+) -> None:
+    tool = GrepTool({"working_dir": str(tmp_path)})
+    if not tool.use_ripgrep:
+        pytest.skip("ripgrep unavailable")
+    (tmp_path / "match.txt").write_text(pattern + "\n", encoding="utf-8")
+    (tmp_path / "other.txt").write_text("not a match\n", encoding="utf-8")
+
+    result = await tool.execute({"pattern": pattern, "output_mode": output_mode, "path": "."})
+
+    assert result.success
+    assert result.output["matches_count"] == 1
+    assert "other.txt" not in str(result.output)
+
+
 @pytest.mark.asyncio
 async def test_mount_honors_module_allowed_paths_and_tool_override(tmp_path: Path) -> None:
     module_root = tmp_path / "module-root"
