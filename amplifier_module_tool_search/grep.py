@@ -170,7 +170,7 @@ PAGINATION:
         self.max_file_size = config.get("max_file_size", 10 * 1024 * 1024)  # 10MB default
         self.working_dir = config.get("working_dir", ".")
         self.allowed_paths = config.get("allowed_paths", ["."])
-        self.path_policy = PathAccessPolicy(self.working_dir, self.allowed_paths)
+        self.path_policy = PathAccessPolicy(self.working_dir, self.allowed_paths, config.get("denied_paths"))
         self.timeout = config.get("timeout", self.DEFAULT_TIMEOUT)
 
         # Configurable exclusions (can override defaults)
@@ -272,7 +272,11 @@ PAGINATION:
         try:
             if "glob" in input:
                 validate_glob_pattern(input["glob"])
-            if self.use_ripgrep:
+            # The Python traversal authorizes every resolved file before open.
+            # rg cannot express all filesystem aliases or deny its implicit
+            # ignore-file reads reliably. Choose enforcement before execution,
+            # never retry a denied search through a different tool/engine.
+            if self.use_ripgrep and not self.path_policy.denied_roots:
                 return await self._execute_ripgrep(input)
             return await self._execute_python(input)
         except PathAuthorizationError:
@@ -290,7 +294,12 @@ PAGINATION:
             return ToolResult(success=False, output=error_msg, error={"message": error_msg})
 
         # Build ripgrep command
-        cmd = [self.rg_path]
+        cmd = [self.rg_path, "--no-config", "--no-follow"]
+        # Ignore files are reads too. Under a path boundary, use the tool's
+        # explicit exclusions instead of letting rg load ambient .ignore,
+        # .gitignore, or global/parent configuration outside that boundary.
+        if self.path_policy.allowed_roots is not None or self.path_policy.denied_roots:
+            cmd.append("--no-ignore")
 
         # Output mode
         output_mode = input.get("output_mode", "files_with_matches")
@@ -369,10 +378,9 @@ PAGINATION:
         if output_mode == "content":
             cmd.append("--json")
 
+        search_path = self.path_policy.resolve(input.get("path", "."))
         # Bind user text as a regexp, never as a ripgrep option.
         cmd.extend(["--regexp", pattern, "--"])
-
-        search_path = self.path_policy.resolve(input.get("path", "."))
         cmd.append(str(search_path))
 
         try:
@@ -427,6 +435,8 @@ PAGINATION:
                 formatted_results = []
                 for match in matches:
                     path = match.get("path", {}).get("text", "")
+                    if not path or not self.path_policy.is_allowed(path):
+                        continue
                     lines_data = match.get("lines", {})
                     line_number = match.get("line_number")
 
@@ -465,7 +475,8 @@ PAGINATION:
 
             elif output_mode == "files_with_matches":
                 # Parse plain text output (one file per line)
-                files = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+                files = [line.strip() for line in result.stdout.strip().split("\n")
+                         if line.strip() and self.path_policy.is_allowed(line.strip())]
 
                 # Capture total before pagination
                 total_files = len(files)
@@ -502,6 +513,8 @@ PAGINATION:
                         parts = line.rsplit(":", 1)
                         if len(parts) == 2:
                             filepath, count_str = parts  # ripgrep outputs filepath:count
+                            if not self.path_policy.is_allowed(filepath):
+                                continue
                             try:
                                 all_counts[filepath] = int(count_str)
                             except ValueError:
