@@ -63,6 +63,24 @@ modules:
 
 > **Note**: If `working_dir` is not set in config, the module uses the `session.working_dir` coordinator capability if available, falling back to `Path.cwd()`. This enables correct behavior in server/web deployments.
 
+Search authority is separate from write permission. Omitted `allowed_paths`
+keeps the standalone default of the working directory. Set `allowed_paths: null`
+explicitly to permit ordinary reads outside that directory, including installed
+package source. An explicit list restricts search roots; `[]` denies all search.
+`denied_paths` always excludes those files/directories, even with unrestricted
+reads or `include_ignored: true`. Relative policy paths use `working_dir`.
+The same options work under `grep` and `glob` configuration. Symlink targets
+are checked against policy. Hosts composing narrower policies must intersect
+allowlists and union denials before mounting. These options never grant writes. When `denied_paths` is nonempty, grep uses
+its Python engine, authorizing each resolved file before opening it. This also
+avoids ripgrep implicitly reading denied ignore files. Such searches use Python
+regular expressions and may be slower than ripgrep; ripgrep-only regex features
+are not available in that policy mode. Unrestricted searches keep the fast
+ripgrep path. With an explicit allowlist, ripgrep disables ambient ignore-file
+loading outside its scope. The tool's default exclusions and requested glob/type
+filters still apply. Restricted searches may include files normally hidden by
+`.gitignore`, but never override a configured path denial.
+
 Note: GrepTool automatically detects if ripgrep is available:
 - **With ripgrep**: Uses ripgrep for extreme performance (recommended)
 - **Without ripgrep**: Falls back to Python's `re` module (slower but works everywhere)

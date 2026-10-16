@@ -58,7 +58,7 @@ SCOPE AND LIMITS:
         self.max_results = config.get("max_results", 500)
         self.allowed_paths = config.get("allowed_paths", ["."])
         self.working_dir = config.get("working_dir", ".")
-        self.path_policy = PathAccessPolicy(self.working_dir, self.allowed_paths)
+        self.path_policy = PathAccessPolicy(self.working_dir, self.allowed_paths, config.get("denied_paths"))
 
         # Configurable exclusions (can override defaults)
         self.exclusions = config.get("exclusions", self.DEFAULT_EXCLUSIONS)

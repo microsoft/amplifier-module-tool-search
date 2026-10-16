@@ -46,7 +46,7 @@ class TestCountModeColonSplit:
         int() and silently drops the entry -- counts would be {} and
         total_matches 0.
         """
-        tool = GrepTool({"working_dir": str(tmp_path)})
+        tool = GrepTool({"working_dir": str(tmp_path), "allowed_paths": None})
         tool.use_ripgrep = True
 
         rg_stdout = "C:\\Users\\me\\project\\file.py:3\nC:\\Users\\me\\project\\other.py:5\n"
@@ -66,7 +66,7 @@ class TestCountModeColonSplit:
     @pytest.mark.asyncio
     async def test_count_mode_still_parses_posix_paths(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """No regression: POSIX paths (no drive-letter colon) still parse."""
-        tool = GrepTool({"working_dir": str(tmp_path)})
+        tool = GrepTool({"working_dir": str(tmp_path), "allowed_paths": None})
         tool.use_ripgrep = True
 
         monkeypatch.setattr(
