@@ -20,7 +20,7 @@ class GrepTool:
 
     name = "grep"
     description = r"""
-Search file contents with regex patterns. Uses ripgrep when available (fast), falls back to Python re.
+Search file contents with regex patterns. Uses ripgrep when available and permitted by read policy (fast), otherwise Python re.
 
 CAPABILITIES:
 - Full regex syntax (e.g., "log.*Error", "function\s+\w+")
@@ -183,6 +183,7 @@ PAGINATION:
         # 0 disables the corresponding bound.
         self.max_line_chars = config.get("max_line_chars", self.DEFAULT_MAX_LINE_CHARS)
         self.max_result_bytes = config.get("max_result_bytes", self.DEFAULT_MAX_RESULT_BYTES)
+        self._missing_ripgrep_warned = False
 
         # Check if ripgrep is available
         rg_path = shutil.which("rg")
@@ -272,13 +273,50 @@ PAGINATION:
         try:
             if "glob" in input:
                 validate_glob_pattern(input["glob"])
+            # Detect a newly installed rg without changing policy-enforced or
+            # explicitly disabled backends. Once found, keep the selected path.
+            if not self.rg_path and not self.path_policy.denied_roots:
+                rg_path = shutil.which("rg")
+                if rg_path:
+                    self.rg_path = rg_path
+                    self.use_ripgrep = True
             # The Python traversal authorizes every resolved file before open.
             # rg cannot express all filesystem aliases or deny its implicit
             # ignore-file reads reliably. Choose enforcement before execution,
             # never retry a denied search through a different tool/engine.
             if self.use_ripgrep and not self.path_policy.denied_roots:
-                return await self._execute_ripgrep(input)
-            return await self._execute_python(input)
+                backend, reason = "ripgrep", "available"
+                result = await self._execute_ripgrep(input)
+            else:
+                backend = "python"
+                reason = (
+                    "path_policy" if self.path_policy.denied_roots
+                    else "ripgrep_unavailable" if not self.rg_path
+                    else "disabled"
+                )
+                result = await self._execute_python(input)
+
+            # Preserve legacy error shapes and do not consume the notice on
+            # failures. Check/set after the await so concurrent successes share
+            # one notice in the session event loop.
+            if result.success and isinstance(result.output, dict):
+                result.output["backend"] = backend
+                result.output["backend_reason"] = reason
+                if reason == "path_policy":
+                    result.output["note"] = (
+                        "Using Python search to enforce configured read denials before opening files. "
+                        "Installing ripgrep does not change this policy-required backend."
+                    )
+                elif reason == "ripgrep_unavailable" and not self._missing_ripgrep_warned:
+                    result.output["warning"] = (
+                        "ripgrep (rg) is not available on this process's PATH; using the slower Python search backend. "
+                        "Install rg for faster searches on large codebases using an authorized setup path, "
+                        "or ask the user; this notice does not authorize installation. "
+                        "The tool checks again on the next search. "
+                        "Results may also differ in ignore-file handling, multiline matching, and counts."
+                    )
+                    self._missing_ripgrep_warned = True
+            return result
         except PathAuthorizationError:
             return ToolResult(
                 success=False,
