@@ -39,7 +39,9 @@ brew install ripgrep
 choco install ripgrep
 ```
 
-**Note**: GrepTool works without ripgrep installed - it will automatically use Python's `re` module as a fallback, providing universal compatibility with graceful performance degradation.
+**Note**: GrepTool works without ripgrep installed, using the slower Python `re`
+backend. The backends can also differ in ignore-file handling, multiline
+matching, and counts; the fallback is not a promise of identical results.
 
 ## Installation
 
@@ -81,9 +83,31 @@ loading outside its scope. The tool's default exclusions and requested glob/type
 filters still apply. Restricted searches may include files normally hidden by
 `.gitignore`, but never override a configured path denial.
 
-Note: GrepTool automatically detects if ripgrep is available:
-- **With ripgrep**: Uses ripgrep for extreme performance (recommended)
-- **Without ripgrep**: Falls back to Python's `re` module (slower but works everywhere)
+GrepTool uses ripgrep when it is available and read policy permits it. Nonempty
+`denied_paths` always select Python, even when ripgrep is installed.
+
+Every successful grep result, including a zero-match result, includes `backend`
+(`ripgrep` or `python`) and `backend_reason`:
+
+| Reason | Meaning |
+|---|---|
+| `available` | Ripgrep was selected. |
+| `ripgrep_unavailable` | No ripgrep executable was found on this process's `PATH`. |
+| `path_policy` | Python is required to enforce configured read denials. |
+| `disabled` | The tool instance's `use_ripgrep` flag was explicitly disabled after discovery. |
+
+The first successful `ripgrep_unavailable` result per tool instance also includes
+a performance-led `warning` suggesting an authorized installation or asking the
+user. Subsequent results retain the backend fields without repeating the warning.
+Failed searches neither include nor consume this warning; error shapes are unchanged.
+When no executable has been found and read policy permits ripgrep, the tool checks
+again before each search. An executable newly available on the running process's
+`PATH` is used immediately, without restarting the session. Once discovered,
+its path is retained; an execution failure is reported, not retried through Python.
+
+Policy-required Python results include a stable `note`, not an installation
+warning. Installing ripgrep cannot change that selection. The tool never installs
+software, grants permission, or suggests weakening read restrictions.
 
 ## Practical Examples
 
@@ -162,9 +186,9 @@ Note: GrepTool automatically detects if ripgrep is available:
 ### Performance Tips
 
 **Grep performance:**
-- **With ripgrep installed**: Extremely fast, optimized for large codebases
-- **Without ripgrep**: Slower but functional, good for smaller projects
-- **Tip**: Install ripgrep for best experience on large codebases
+- **With ripgrep selected**: Fast, optimized for large codebases
+- **With Python selected**: Slower; may be required by read policy even when ripgrep is installed
+- **Tip**: Install ripgrep through an authorized setup path for faster large-codebase searches where read policy permits it
 
 **Glob performance:**
 - Returns results sorted by modification time (newest first)
