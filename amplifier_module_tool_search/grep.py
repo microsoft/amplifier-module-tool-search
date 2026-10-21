@@ -29,6 +29,7 @@ CAPABILITIES:
 - Multiline matching with `multiline: true` for patterns spanning lines
 
 SCOPE AND LIMITS:
+- Choose an explicit target permitted by this tool's configured access policy. Ignore controls select content; they do not grant access.
 - By default, excludes common non-source directories: node_modules, .venv, .git, __pycache__, build dirs
 - Results are limited by default (200 files/counts, 500 content matches) to prevent context overflow
 - In content mode, each matched line is truncated to 2000 characters (marked "... [truncated]") and the total

@@ -11,6 +11,12 @@ from amplifier_module_tool_search.grep import GrepTool
 from amplifier_module_tool_search.paths import ACCESS_DENIED_MESSAGE
 
 
+@pytest.mark.parametrize("tool_class", [GlobTool, GrepTool])
+def test_description_distinguishes_access_policy_from_ignore_controls(tool_class):
+    assert "permitted by this tool's configured access policy" in tool_class.description
+    assert "Ignore controls select content; they do not grant access" in tool_class.description
+
+
 class _NoMatchProcess:
     returncode = 1
     stdout = ""

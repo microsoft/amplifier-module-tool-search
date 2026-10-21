@@ -23,6 +23,7 @@ class GlobTool:
 - You can call multiple tools in a single response. It is always better to speculatively perform multiple searches in parallel if they are potentially useful.
 
 SCOPE AND LIMITS:
+- Choose an explicit target permitted by this tool's configured access policy. Ignore controls select content; they do not grant access.
 - By default, excludes common non-source directories: node_modules, .venv, .git, __pycache__, build dirs
 - Results are limited to 500 files by default to prevent context overflow
 - Set `include_ignored: true` to search excluded directories
